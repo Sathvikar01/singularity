@@ -480,11 +480,13 @@ export function createScene(container: HTMLElement) {
     });
     if (course.finalRing) {
       const alignment = finalAlignment(ticks);
+      const stage = body ? courseFor(body.challenge).stages[body.stage] : undefined;
+      const alignedVisual = isFinalAligned(ticks) || (stage?.kind === "finalTiming" && body?.syncStarted);
       course.finalRing.rotation.z = time * 0.55;
       course.finalRing.children.forEach((child, index) => {
         child.rotation.y = time * (index % 2 ? -1.1 : 0.8) + index;
         const ringMaterial = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        ringMaterial.emissiveIntensity = isFinalAligned(ticks) ? 2.2 : 0.45;
+        ringMaterial.emissiveIntensity = alignedVisual ? 2.2 : 0.45;
       });
       course.finalRing.scale.setScalar(1 + Math.max(0, Math.abs(alignment) - 0.8) * 0.25);
     }

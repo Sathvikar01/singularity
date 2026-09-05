@@ -495,12 +495,20 @@ function stageProgress(body: Body, crewInputs: Input[], controls: CanonicalInput
     case "finalTiming": {
       const everybody = allPilotActions(body, crewInputs), aligned = isFinalAligned(body.ticks);
       const previouslyTogether = body.previousActions.length === body.crewSize && body.previousActions.every(Boolean);
-      if (!everybody || !aligned) body.syncStarted = false;
-      if (nearGate && everybody && !previouslyTogether && !aligned && body.lockout <= 0) {
-        body.mistakes++; body.penaltyMs += course.timingPenaltyMs; body.lockout = 30; body.charge = 0;
+      if (!everybody) {
+        body.syncStarted = false;
+        body.charge = 0;
       }
-      if (nearGate && everybody && !previouslyTogether && aligned && body.lockout <= 0) body.syncStarted = true;
-      charging = nearGate && everybody && aligned && body.syncStarted && body.lockout <= 0; chargeSeconds = 0.3; break;
+      if (nearGate && everybody && !previouslyTogether && body.lockout <= 0) {
+        if (aligned) body.syncStarted = true;
+        else {
+          body.mistakes++;
+          body.penaltyMs += course.timingPenaltyMs;
+          body.lockout = 30;
+          body.charge = 0;
+        }
+      }
+      charging = nearGate && everybody && body.syncStarted && body.lockout <= 0; chargeSeconds = 0.3; break;
     }
     case "finish":
       if (nearGate && body.nodes.every(point => point.z >= stage.gate - 0.75)) advance(body);
@@ -621,7 +629,7 @@ export function teammateInputs(body: Body): Input[] {
     }
     return { x, z, action };
   }) as [Input, Input];
-  const finalReady = stage.kind === "finalTiming" && nearGate && Math.abs(finalAlignment(body.ticks)) > 0.965;
+  const finalReady = stage.kind === "finalTiming" && nearGate && isFinalAligned(body.ticks + 1);
   if (stage.kind === "finalTiming") handInputs.forEach(input => { input.action = finalReady; });
   const legAction = ["switches", "balance", "climb", "unstable"].includes(stage.kind) || finalReady;
   const legs: [Input, Input] = [{ x: steer, z: forward, action: legAction }, { x: steer, z: forward, action: legAction }];

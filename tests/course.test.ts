@@ -71,9 +71,16 @@ test("course definitions own ordered payload, hazard, and platform truth", () =>
 });
 
 test("one launch-window query serves simulation, rendering, and HUD callers", () => {
+  assert.equal(FINAL_ALIGNMENT_THRESHOLD, 0.9);
   for (let ticks = 0; ticks < 300; ticks++) {
     assert.equal(isFinalAligned(ticks), Math.abs(finalAlignment(ticks)) > FINAL_ALIGNMENT_THRESHOLD);
   }
+  let longestWindow = 0, currentWindow = 0;
+  for (let ticks = 1; ticks < 600; ticks++) {
+    currentWindow = isFinalAligned(ticks) ? currentWindow + 1 : 0;
+    longestWindow = Math.max(longestWindow, currentWindow);
+  }
+  assert.ok(longestWindow >= 20, `launch window lasted only ${longestWindow} simulation ticks`);
 });
 
 test("course motion queries preserve the deterministic ruleset", () => {

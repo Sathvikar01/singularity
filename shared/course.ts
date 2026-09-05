@@ -1,5 +1,5 @@
 export const SIMULATION_HZ = 30;
-export const FINAL_ALIGNMENT_THRESHOLD = 0.94;
+export const FINAL_ALIGNMENT_THRESHOLD = 0.9;
 
 export const CHALLENGE = { Easy: 0, Medium: 1, Difficult: 2 } as const;
 export type ChallengeId = (typeof CHALLENGE)[keyof typeof CHALLENGE];
@@ -229,7 +229,7 @@ export const COURSE_DEFINITIONS = [
       { name: "Socket one", hint: "Place the first core in the left socket and release cleanly", gate: 72, spawn: 63, kind: "placeFirst" },
       { name: "Second payload", hint: "Coordinate another precise two-hand lift", gate: 82, spawn: 73, kind: "secondLift" },
       { name: "Twin lock", hint: "Carry the second core into the right socket and let go together", gate: 94, spawn: 83, kind: "placeSecond" },
-      { name: "Launch window", hint: "Wait for ALIGN, then every pilot holds ACT on the same beat", gate: 108, spawn: 96, kind: "finalTiming" },
+      { name: "Launch window", hint: "Release while waiting. On ALIGN, every pilot presses ACT; when SYNC LOCKED, keep holding", gate: 108, spawn: 96, kind: "finalTiming" },
     ],
   },
 ] as const satisfies readonly CourseDefinition[];

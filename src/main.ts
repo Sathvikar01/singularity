@@ -638,7 +638,13 @@ function roleFeedback(view: RaceSessionView) {
   const { body, controlledRole: role } = view;
   const stage = challengeFor(body.challenge).stages[body.stage];
   if (!stage) return "Course complete";
-  if (stage.kind === "finalTiming") return isFinalAligned(body.ticks) ? "ALIGN · every pilot ACT now" : "WAIT · watch the launch rings";
+  if (stage.kind === "finalTiming") {
+    if (body.syncStarted) return "SYNC LOCKED · keep holding ACT";
+    if (body.lockout > 0) return "MISSED BEAT · every pilot release ACT";
+    return isFinalAligned(body.ticks)
+      ? "ALIGN · every pilot press ACT together"
+      : "WAIT · release ACT and watch the launch rings";
+  }
   if (body.crewSize === 3) {
     if (role === 0) return securelyHeld(body) ? "BOTH HANDS SECURE" : `LEFT ${body.handGrip[0] >= 0 ? "HELD" : "OPEN"} · RIGHT ${body.handGrip[1] >= 0 ? "HELD" : "OPEN"}`;
     if (role === 1) return body.bend ? "BENT LOW · keep moving" : body.brace ? "BRACED · absorbing movement" : "Hold ACT to brace or bend";
@@ -665,9 +671,17 @@ function frame(timestamp: number) {
     ($("objective-progress") as HTMLProgressElement).value = body.finished ? 1 : stageProgressValue(body);
     $("objective-panel").dataset.stage = String(body.stage);
     $("role-feedback").textContent = roleFeedback(view);
-    const aligned = stage?.kind === "finalTiming" && isFinalAligned(body.ticks);
-    $("sync-signal").textContent = stage?.kind === "finalTiming" ? aligned ? "ALIGN · ACT" : "WAIT FOR ALIGN" : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`;
-    $("sync-signal").classList.toggle("aligned", Boolean(aligned));
+    const finalTiming = stage?.kind === "finalTiming";
+    const aligned = finalTiming && isFinalAligned(body.ticks);
+    const syncText = body.syncStarted
+      ? "SYNC LOCKED · HOLD"
+      : body.lockout > 0
+        ? "MISSED BEAT · RELEASE"
+        : aligned
+          ? "ALIGN · ACT TOGETHER"
+          : "WAIT · RELEASE ACT";
+    $("sync-signal").textContent = finalTiming ? syncText : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`;
+    $("sync-signal").classList.toggle("aligned", Boolean(aligned || (finalTiming && body.syncStarted)));
     challenge.stages.forEach((_, index) => {
       $("stage-" + index).classList.toggle("current", body.stage === index);
       $("stage-" + index).classList.toggle("complete", body.stage > index);

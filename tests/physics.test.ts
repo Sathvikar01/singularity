@@ -76,6 +76,18 @@ function placeAtStageGate(body: ReturnType<typeof createBody>, stageIndex: numbe
   }
 }
 
+function tickBeforeAlignmentStarts() {
+  let tick = 1;
+  while (isFinalAligned(tick) || !isFinalAligned(tick + 1)) tick++;
+  return tick;
+}
+
+function tickBeforeAlignmentEnds() {
+  let tick = 1;
+  while (!isFinalAligned(tick + 1) || isFinalAligned(tick + 2)) tick++;
+  return tick;
+}
+
 function runRepresentativeObjective(crewSize: number, stageIndex: number, missingRole = -1) {
   const body = createBody(CHALLENGE.Easy, crewSize);
   placeAtStageGate(body, stageIndex);
@@ -554,6 +566,67 @@ for (const crewSize of CREW_SIZES) {
     assert.equal(body.stage, CHALLENGES[CHALLENGE.Difficult].stages.length);
     assert.equal(body.mistakes, 0);
     assert.equal(body.penaltyMs, 0);
+  });
+}
+
+for (const crewSize of CREW_SIZES) {
+  test(`Difficult ${crewSize}p late aligned edge stays committed while pilots hold`, () => {
+    const finalStage = CHALLENGES[CHALLENGE.Difficult].stages.length - 1;
+    const body = createBody(CHALLENGE.Difficult, crewSize);
+    placeAtStageGate(body, finalStage);
+    body.ticks = tickBeforeAlignmentEnds();
+    const allAct = neutralInputs(crewSize).map(input => ({ ...input, action: true }));
+
+    step(body, allAct);
+    assert.equal(body.syncStarted, true);
+    assert.ok(body.charge > 0);
+    assert.equal(isFinalAligned(body.ticks + 1), false, "test must arm on the final aligned tick");
+    for (let tick = 0; tick < 10 && !body.finished; tick++) step(body, allAct);
+
+    assert.equal(body.finished, true);
+    assert.equal(body.mistakes, 0);
+  });
+}
+
+for (const crewSize of CREW_SIZES) {
+  test(`Difficult ${crewSize}p tolerates realistic pilot input skew inside one launch window`, () => {
+    const finalStage = CHALLENGES[CHALLENGE.Difficult].stages.length - 1;
+    const body = createBody(CHALLENGE.Difficult, crewSize);
+    placeAtStageGate(body, finalStage);
+    body.ticks = tickBeforeAlignmentStarts();
+    const delays = crewSize === 3 ? [0, 4, 8] : [0, 2, 4, 6, 8];
+
+    for (let elapsed = 0; elapsed <= 8; elapsed++) {
+      const staggered = neutralInputs(crewSize);
+      staggered.forEach((input, role) => { input.action = elapsed >= delays[role]; });
+      step(body, staggered);
+    }
+    assert.equal(body.syncStarted, true);
+    assert.equal(body.mistakes, 0);
+
+    const allAct = neutralInputs(crewSize).map(input => ({ ...input, action: true }));
+    for (let tick = 0; tick < 10 && !body.finished; tick++) step(body, allAct);
+    assert.equal(body.finished, true);
+  });
+}
+
+for (const crewSize of CREW_SIZES) {
+  test(`Difficult ${crewSize}p release cancels a committed launch hold`, () => {
+    const finalStage = CHALLENGES[CHALLENGE.Difficult].stages.length - 1;
+    const body = createBody(CHALLENGE.Difficult, crewSize);
+    placeAtStageGate(body, finalStage);
+    body.ticks = tickBeforeAlignmentStarts();
+    const allAct = neutralInputs(crewSize).map(input => ({ ...input, action: true }));
+    step(body, allAct);
+    step(body, allAct);
+    assert.equal(body.syncStarted, true);
+    assert.ok(body.charge > 0);
+
+    const released = allAct.map(input => ({ ...input }));
+    released[0].action = false;
+    step(body, released);
+    assert.equal(body.syncStarted, false);
+    assert.equal(body.charge, 0);
   });
 }
 
