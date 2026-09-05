@@ -8,7 +8,7 @@ const node=(x:number,y:number,z:number):Node=>({x,y,z,px:x,py:y,pz:z});
 export function createBody(z=0):Body{return {nodes:[node(0,2,z),node(0,3,z),node(-1,2,z),node(1,2,z),node(-.45,.35,z),node(.45,.35,z)],stage:0,falls:0,ticks:0,finished:false,grip:-1,cube:node(0,.5,18),delivered:false,look:0};}
 export const LINKS=[[0,1,1],[0,2,1],[0,3,1],[0,4,1.7],[0,5,1.7],[4,5,.9],[1,2,1.4],[1,3,1.4]];
 export function ground(x:number,z:number){if(z>7&&z<15)return Math.abs(x)<1.3?0:-30;return Math.abs(x)<4.6&&z>-5&&z<47?0:-30;}
-function integrate(n:Node,fx=0,fy=0,fz=0){const vx=(n.x-n.px)*.93,vy=(n.y-n.py)*.98,vz=(n.z-n.pz)*.93;n.px=n.x;n.py=n.y;n.pz=n.z;n.x+=vx+fx*DT*DT;n.y+=vy+(fy-15)*DT*DT;n.z+=vz+fz*DT*DT;}
+function integrate(n:Node,fx=0,fy=0,fz=0){const vx=(n.x-n.px)*.90,vy=(n.y-n.py)*.98,vz=(n.z-n.pz)*.90;n.px=n.x;n.py=n.y;n.pz=n.z;n.x+=vx+fx*DT*DT;n.y+=vy+(fy-15)*DT*DT;n.z+=vz+fz*DT*DT;}
 export function step(b:Body,inputs:Input[]){
  if(b.finished)return;
  if(b.nodes[0].y<-5||b.cube.y<-8){const fresh=createBody(b.stage===0?0:b.stage===1?16:28);b.nodes=fresh.nodes;if(!b.delivered)b.cube=fresh.cube;b.falls++;b.grip=-1;return;}
@@ -16,7 +16,7 @@ export function step(b:Body,inputs:Input[]){
  // Upright assistance is a spring, not a kinematic lock. Torso player adds balance.
  for(let i=0;i<6;i++){const role=i===0?3:i===1?0:i===2?1:i===3?2:i;const u=inputs[role];const leg=i>=4;const target=i===0?2:i===1?3:i<4?2:.35;const support=ground(torso.x,torso.z)>-1;let fy=support?(target-n[i].y)*70-(n[i].y-n[i].py)*130:0;
  if(u.action&&leg&&n[i].y<.65)fy+=180;
- integrate(n[i],u.x*(leg?48:i===0?35:18),fy,u.z*(leg?65:i===0?22:15));}
+ integrate(n[i],u.x*(leg?24:i===0?25:12),fy,u.z*(leg?30:i===0?18:12));}
  b.look+=inputs[0].x*.045;
  for(let pass=0;pass<7;pass++){for(const [a,c,len]of LINKS){const p=n[a],q=n[c],dx=q.x-p.x,dy=q.y-p.y,dz=q.z-p.z,d=Math.hypot(dx,dy,dz)||1,k=(d-len)/d*.5;p.x+=dx*k;p.y+=dy*k;p.z+=dz*k;q.x-=dx*k;q.y-=dy*k;q.z-=dz*k;}for(let i=0;i<n.length;i++){const p=n[i],floor=ground(p.x,p.z)+.25;if(p.y<floor){p.y=floor;p.py=p.y;}}}
  integrate(b.cube);const floor=ground(b.cube.x,b.cube.z)+.45;if(b.cube.y<floor){b.cube.y=floor;b.cube.py=floor;}

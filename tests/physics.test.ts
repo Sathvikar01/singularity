@@ -5,3 +5,6 @@ test('simulation is deterministic and remains finite',()=>{const a=createBody(),
 test('leg input propels the shared body',()=>{const a=createBody();const input=neutralInputs();input[4].z=1;input[5].z=1; for(let i=0;i<100;i++)step(a,input);assert.ok(a.nodes[0].z>2);});
 test('checkpoints cannot be skipped',()=>{const a=createBody();for(const n of a.nodes)n.z+=45;step(a,neutralInputs());assert.equal(a.stage,0);});
 test('falls recover at checkpoint with penalty',()=>{const a=createBody();for(const n of a.nodes)n.y=-20;step(a,neutralInputs());assert.equal(a.falls,1);assert.ok(a.nodes[0].y>0);});
+test('coordinated legs and grabbing finish all three challenges',()=>{const a=createBody(),u=neutralInputs();u[4].z=u[5].z=1;u[1].action=u[2].action=true;for(let i=0;i<900&&!a.finished;i++)step(a,u);assert.equal(a.stage,3);assert.equal(a.delivered,true);assert.equal(a.finished,true);});
+test('walking without carrying cannot complete the race',()=>{const a=createBody(),u=neutralInputs();u[4].z=u[5].z=1;for(let i=0;i<900;i++)step(a,u);assert.equal(a.finished,false);assert.equal(a.stage,1);});
+test('finished bodies stop advancing their timer',()=>{const a=createBody();a.finished=true;step(a,neutralInputs());assert.equal(a.ticks,0);});

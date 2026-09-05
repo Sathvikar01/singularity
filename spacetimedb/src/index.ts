@@ -12,7 +12,8 @@ export const init=db.init(ctx=>{ctx.db.tick.insert({id:0n,scheduledAt:ScheduleAt
 export const join=db.reducer({code:t.string(),name:t.string(),teamNumber:t.u32(),role:t.u32()},(ctx,a)=>{
  const code=a.code.trim().toUpperCase();if(!/^[A-Z0-9]{3,12}$/.test(code)||a.role>5||a.teamNumber>3||!a.name.trim())throw new SenderError('Enter a room code (3–12 letters/numbers), name, and valid role.');
  let r=ctx.db.room.id.find(code);if(!r){if([...ctx.db.room.iter()].length>=200)throw new SenderError('Lobby capacity reached.');r=ctx.db.room.insert({id:code,host:ctx.sender,state:'lobby',startAt:0n,created:now(ctx)});}
- if(r.state!=='lobby')throw new SenderError('This race has started. Choose another room.');
+ const previous=ctx.db.player.id.find(ctx.sender);
+ if(r.state!=='lobby'&&!(previous?.room===code&&previous.team===a.teamNumber))throw new SenderError('This race has started. Choose another room.');
  for(const p of ctx.db.player.iter())if(p.room===code&&p.team===a.teamNumber&&p.role===a.role&&!p.id.isEqual(ctx.sender))throw new SenderError('That body part already has a pilot.');
  ctx.db.player.id.delete(ctx.sender);ctx.db.player.insert({id:ctx.sender,room:code,team:a.teamNumber,role:a.role,name:a.name.trim().slice(0,20),x:0,z:0,action:false,seen:now(ctx)});
  const id=code+':'+a.teamNumber;if(!ctx.db.team.id.find(id))ctx.db.team.insert({id,room:code,number:a.teamNumber,body:JSON.stringify(createBody()),finishMs:0});
