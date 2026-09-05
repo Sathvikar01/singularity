@@ -4,6 +4,7 @@ import {
   CHALLENGE,
   CHALLENGES,
   CREW_SIZES,
+  DT,
   LINKS,
   RULESET,
   challengeFor,
@@ -26,6 +27,15 @@ import {
 } from "../shared/physics.ts";
 
 const MAX_RUN_TICKS = 12_000;
+const COMPLETION_BUDGETS = [650, 1_000, 1_250] as const;
+
+function planarSpeed(point: ReturnType<typeof createBody>["nodes"][number]) {
+  return Math.hypot(point.x - point.px, point.z - point.pz) / DT;
+}
+
+function verticalSpeed(point: ReturnType<typeof createBody>["nodes"][number]) {
+  return (point.y - point.py) / DT;
+}
 
 function assertFiniteAndJointBounded(body: ReturnType<typeof createBody>) {
   for (const point of [...body.nodes, ...body.objects]) {
@@ -252,6 +262,75 @@ test("3p Legs drives both feet while 5p leg slots drive their own foot", () => {
   }
 });
 
+test("grounded leg drive reaches running speed and brakes without ice skating", () => {
+  const body = createBody(CHALLENGE.Medium, 3);
+  const drive = neutralInputs(3);
+  drive[2].z = 1;
+  for (let tick = 0; tick < 60; tick++) step(body, drive);
+
+  const runningSpeed = planarSpeed(body.nodes[0]);
+  assert.ok(runningSpeed >= 2.8 && runningSpeed <= 3.8, `running speed was ${runningSpeed.toFixed(2)} units/s`);
+
+  const releaseZ = body.nodes[0].z;
+  for (let tick = 0; tick < 23; tick++) step(body, neutralInputs(3));
+  assert.ok(planarSpeed(body.nodes[0]) < 0.6, "a released body must settle within 0.75 seconds");
+  assert.ok(body.nodes[0].z - releaseZ < 1, "a released body must not coast across an objective");
+});
+
+test("stride impulses are rising-edge driven and remain leg-role local", () => {
+  const input = neutralInputs(5);
+  input[3].action = true;
+  const fresh = createBody(CHALLENGE.Easy, 5);
+  const alreadyHeld = createBody(CHALLENGE.Easy, 5);
+  alreadyHeld.previousActions[3] = true;
+  step(fresh, input);
+  step(alreadyHeld, input);
+
+  const leftLift = verticalSpeed(fresh.nodes[4]) - verticalSpeed(alreadyHeld.nodes[4]);
+  const rightLift = verticalSpeed(fresh.nodes[5]) - verticalSpeed(alreadyHeld.nodes[5]);
+  assert.ok(leftLift > 2, "a fresh left-leg action must create a stride impulse");
+  assert.ok(leftLift > rightLift + 0.7, "the left-leg impulse must remain strongest on its assigned foot");
+
+  const continuingHold = structuredClone(fresh);
+  const hypotheticalNewEdge = structuredClone(fresh);
+  hypotheticalNewEdge.previousActions[3] = false;
+  step(continuingHold, input);
+  step(hypotheticalNewEdge, input);
+  assert.ok(
+    verticalSpeed(hypotheticalNewEdge.nodes[4]) > verticalSpeed(continuingHold.nodes[4]) + 2,
+    "holding ACT must not retrigger a stride",
+  );
+});
+
+test("hold objectives consume leg ACT without adding a hidden hop", () => {
+  const input = neutralInputs(5);
+  input[3].action = true;
+  const fresh = createBody(CHALLENGE.Easy, 5);
+  const alreadyHeld = createBody(CHALLENGE.Easy, 5);
+  fresh.stage = alreadyHeld.stage = 3;
+  alreadyHeld.previousActions[3] = true;
+  step(fresh, input);
+  step(alreadyHeld, input);
+  assert.deepEqual(fresh.nodes, alreadyHeld.nodes);
+});
+
+test("a stationary torso brace dissipates drift without self-propulsion", () => {
+  const loose = createBody(CHALLENGE.Easy, 5);
+  const braced = structuredClone(loose);
+  for (const point of [...loose.nodes, ...braced.nodes]) point.px -= 0.08;
+  const braceInput = neutralInputs(5);
+  braceInput[2].action = true;
+  for (let tick = 0; tick < 8; tick++) {
+    step(loose, neutralInputs(5));
+    step(braced, braceInput);
+  }
+  assert.ok(planarSpeed(braced.nodes[0]) < planarSpeed(loose.nodes[0]) * 0.5);
+
+  const stationary = createBody(CHALLENGE.Easy, 5);
+  for (let tick = 0; tick < 60; tick++) step(stationary, braceInput);
+  assert.ok(Math.hypot(stationary.nodes[0].x, stationary.nodes[0].z) < 0.05);
+});
+
 test("Torso maps to slot 2 in 3p and slot 3 in 5p display order", () => {
   for (const [crewSize, torsoSlot] of [[3, 1], [5, 2]] as const) {
     const body = createBody(CHALLENGE.Easy, crewSize);
@@ -299,6 +378,7 @@ for (const challenge of CHALLENGES) {
       assert.equal(first.falls, 0);
       assert.equal(first.mistakes, 0);
       assert.deepEqual(first, second);
+      assert.ok(first.ticks <= COMPLETION_BUDGETS[challenge.id], `${challenge.difficulty} ${crewSize}p exceeded its pacing budget`);
       assert.equal(elapsedMs(first), Math.round(first.ticks * 1000 / 30));
       assert.match(formatTime(elapsedMs(first)), /^\d{2,}:\d{2}\.\d{3}$/);
     });

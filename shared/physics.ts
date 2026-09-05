@@ -35,6 +35,16 @@ export type { Challenge, ChallengeId, CourseDefinition, CrewSize, Stage, StageKi
 export const DT = 1 / SIMULATION_HZ;
 export const RULESET = 4;
 
+const LEG_TARGET_SPEED = 5.2;
+const GROUNDED_DRIVE_RESPONSE = 0.32;
+const GROUNDED_BRAKE_RESPONSE = 0.48;
+const BRACED_DRIVE_RESPONSE = 0.38;
+const BRACED_BRAKE_RESPONSE = 0.62;
+const AIRBORNE_DRIVE_RESPONSE = 0.07;
+const STRIDE_UP_VELOCITY = 10;
+const STRIDE_FORWARD_VELOCITY = 0.85;
+const HOLD_OBJECTIVE_KINDS = ["switches", "balance", "climb", "unstable", "finalTiming"] as const;
+
 export type RoleDefinition = {
   name: string;
   help: string;
@@ -231,10 +241,44 @@ function expandCrewInputs(body: Body, raw: Input[]): CanonicalInputs {
   return { hands: [{ ...inputs[0] }, { ...inputs[1] }], torso: { ...inputs[2] }, legs: [{ ...inputs[3] }, { ...inputs[4] }] };
 }
 
-function integrate(n: Node, fx = 0, fy = 0, fz = 0) {
-  const vx = (n.x - n.px) * 0.9, vy = (n.y - n.py) * 0.98, vz = (n.z - n.pz) * 0.9;
+function integrate(n: Node, fx = 0, fy = 0, fz = 0, planarRetention = 0.9) {
+  const vx = (n.x - n.px) * planarRetention, vy = (n.y - n.py) * 0.98, vz = (n.z - n.pz) * planarRetention;
   n.px = n.x; n.py = n.y; n.pz = n.z;
   n.x += vx + fx * DT * DT; n.y += vy + (fy - 15) * DT * DT; n.z += vz + fz * DT * DT;
+}
+
+function planarVelocity(n: Node) {
+  return { x: (n.x - n.px) / DT, z: (n.z - n.pz) / DT };
+}
+
+function setLegTargetVelocity(n: Node, input: Input, grounded: boolean, braced: boolean) {
+  const velocity = planarVelocity(n);
+  const inputLength = Math.hypot(input.x, input.z);
+  const inputScale = inputLength > 1 ? 1 / inputLength : 1;
+  const targetX = input.x * inputScale * LEG_TARGET_SPEED;
+  const targetZ = input.z * inputScale * LEG_TARGET_SPEED;
+  const response = inputLength > 0.01
+    ? grounded
+      ? braced ? BRACED_DRIVE_RESPONSE : GROUNDED_DRIVE_RESPONSE
+      : AIRBORNE_DRIVE_RESPONSE
+    : grounded
+      ? braced ? BRACED_BRAKE_RESPONSE : GROUNDED_BRAKE_RESPONSE
+      : 0;
+  if (response <= 0) return;
+  const nextX = velocity.x + (targetX - velocity.x) * response;
+  const nextZ = velocity.z + (targetZ - velocity.z) * response;
+  n.px = n.x - nextX * DT;
+  n.pz = n.z - nextZ * DT;
+}
+
+function addVelocityImpulse(n: Node, x: number, y: number, z: number) {
+  n.px -= x * DT;
+  n.py -= y * DT;
+  n.pz -= z * DT;
+}
+
+function legRoleIndex(body: Body, side: number) {
+  return body.crewSize === 3 ? 2 : side + 3;
 }
 
 function pin(n: Node, x: number, y: number, z: number, smoothing = 1) {
@@ -468,18 +512,39 @@ export function step(body: Body, raw: Input[]) {
   carryMovingSupports(body);
   const torso = body.nodes[0];
   const canonical = [controls.torso, neutralInput(), controls.hands[0], controls.hands[1], controls.legs[0], controls.legs[1]];
+  const stationaryBrace = body.brace &&
+    Math.hypot(controls.torso.x, controls.torso.z) < 0.05 &&
+    Math.hypot(controls.legs[0].x, controls.legs[0].z) < 0.05 &&
+    Math.hypot(controls.legs[1].x, controls.legs[1].z) < 0.05;
   for (let index = 0; index < body.nodes.length; index++) {
     const point = body.nodes[index], input = canonical[index], isHand = index === 2 || index === 3, isLeg = index >= 4;
     const surface = groundAt(body.challenge, point.x, point.z, body.ticks);
     const baseHeight = body.bend ? index === 0 ? 1.35 : index === 1 ? 2.15 : isHand ? 1.45 : 0.35 : index === 0 ? 2 : index === 1 ? 3 : isHand ? 2 : 0.35;
     const target = surface > -10 ? surface + baseHeight : point.y, support = surface > -10;
-    let fy = support ? (target - point.y) * 70 - (point.y - point.py) * 130 : 0;
-    const previousIndex = body.crewSize === 3 ? isLeg ? 2 : index === 0 ? 1 : 0 : index === 0 ? 2 : isHand ? index - 2 : index - 1;
-    if (isLeg && stage.kind !== "switches" && input.action && !body.previousActions[previousIndex] && point.y < surface + 0.68 && support) fy += 300;
+    const supportStrength = body.brace ? 84 : 70;
+    const supportDamping = body.brace ? 160 : 130;
+    const fy = support ? (target - point.y) * supportStrength - (point.y - point.py) * supportDamping : 0;
+    if (isLeg) {
+      const grounded = support && point.y < surface + 0.58;
+      setLegTargetVelocity(point, input, grounded, body.brace);
+      const side = index - 4;
+      const strideAllowed = !HOLD_OBJECTIVE_KINDS.includes(stage.kind as typeof HOLD_OBJECTIVE_KINDS[number]);
+      const freshAction = input.action && !body.previousActions[legRoleIndex(body, side)];
+      if (strideAllowed && grounded && freshAction) {
+        const inputLength = Math.hypot(input.x, input.z);
+        const directionScale = inputLength > 0.01 ? 1 / Math.max(1, inputLength) : 0;
+        addVelocityImpulse(
+          point,
+          input.x * directionScale * STRIDE_FORWARD_VELOCITY,
+          STRIDE_UP_VELOCITY,
+          input.z * directionScale * STRIDE_FORWARD_VELOCITY,
+        );
+      }
+    }
     const armRest = isHand ? (torso.x + (index === 2 ? -1 : 1) - point.x) * 6 : 0;
-    const fx = (index === 1 ? 0 : input.x * (isLeg ? 24 : index === 0 ? 22 : 13)) + armRest;
-    const fz = index === 1 ? 0 : input.z * (isLeg ? 30 : index === 0 ? 8 : 9);
-    integrate(point, fx, fy, fz);
+    const fx = (index === 1 || isLeg ? 0 : input.x * (index === 0 ? 22 : 13)) + armRest;
+    const fz = index === 1 || isLeg ? 0 : input.z * (index === 0 ? 8 : 9);
+    integrate(point, fx, fy, fz, isLeg ? 1 : stationaryBrace ? 0.84 : 0.9);
   }
   const travelX = clamp(controls.torso.x * 0.45 + controls.legs[0].x * 0.2 + controls.legs[1].x * 0.2);
   body.look = angleDelta(Math.atan2(travelX, 1), body.look) * 0.08 + body.look;
@@ -512,7 +577,7 @@ function targetForStage(body: Body) {
   const stage = challengeFor(body.challenge).stages[body.stage], objectIndex = activeObjectIndex(body), object = body.objects[objectIndex], payload = courseFor(body.challenge).payloads[objectIndex], dock = payload.dock;
   const placing = ["delivery", "placeFirst", "placeSecond"].includes(stage.kind);
   const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.approachRadius;
-  const needsObject = ["lift", "precisionLift", "secondLift"].includes(stage.kind) || (placing && !objectAtDock && !securelyHeld(body, objectIndex));
+  const needsObject = !securelyHeld(body, objectIndex) && (["lift", "precisionLift", "secondLift"].includes(stage.kind) || (placing && !objectAtDock));
   const targetZ = needsObject ? object.z : placing && securelyHeld(body, objectIndex) ? dock[2] : stage.gate;
   const targetX = placing && securelyHeld(body, objectIndex) ? dock[0] : platformCenter(body.challenge, body.nodes[0].z + 2.5, body.ticks);
   return { stage, objectIndex, object, payload, dock, targetX, targetZ };
