@@ -11,6 +11,7 @@ import {
 } from "../shared/course.ts";
 import type { Body } from "../shared/physics";
 import { createCharacter, type CharacterRig } from "./character";
+import { dampingAlpha } from "./body-pose";
 
 const TEAM_COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
 
@@ -30,12 +31,13 @@ export function createScene(container: HTMLElement) {
   const initialPalette = courseFor(CHALLENGE.Easy).palette;
   scene.background = new THREE.Color(initialPalette.background);
   scene.fog = new THREE.FogExp2(initialPalette.fog, 0.012);
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.23;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.append(renderer.domElement);
 
   const camera = new THREE.PerspectiveCamera(43, 1, 0.1, 220);
@@ -288,6 +290,7 @@ export function createScene(container: HTMLElement) {
   }
 
   const vector = new THREE.Vector3();
+  const focus = new THREE.Vector3();
   const look = new THREE.Vector3(0, 1, 6);
   let follow = false;
   let activeChallenge: ChallengeId = CHALLENGE.Easy;
@@ -304,13 +307,15 @@ export function createScene(container: HTMLElement) {
   }
   showChallenge(activeChallenge);
 
-  function update(bodies: Map<number, Body>, selected: number, time: number) {
+  function update(bodies: Map<number, Body>, selected: number, attemptId: string, time: number, deltaSeconds: number) {
     for (const [id, rig] of robots) rig.setVisible(bodies.has(id));
-    for (const [id, body] of bodies) (robots.get(id) || robot(id)).update(body, time, !follow);
+    for (const [id, body] of bodies)
+      (robots.get(id) || robot(id)).update(`${attemptId}:${id}`, body, time, deltaSeconds, !follow);
     const body = bodies.get(selected);
+    const selectedRig = body ? robots.get(selected) : undefined;
     if (body && body.challenge !== activeChallenge) showChallenge(body.challenge);
     const course = courses[activeChallenge];
-    const ticks = body?.ticks ?? Math.round(time * 30);
+    const ticks = selectedRig?.getRenderTick() ?? time * 30;
     course.hazards.forEach((mesh, index) => { mesh.position.x = hazardX(activeChallenge, index, ticks); });
     course.movingPlatforms.forEach(({ mesh, z }) => { mesh.position.x = platformCenter(activeChallenge, z, ticks); });
     course.barriers.forEach((mesh, index) => { mesh.visible = !body || body.stage <= index; });
@@ -334,14 +339,20 @@ export function createScene(container: HTMLElement) {
       course.finalRing.scale.setScalar(1 + Math.max(0, Math.abs(alignment) - 0.8) * 0.25);
     }
 
-    if (body && follow) {
-      const torso = body.nodes[0];
-      camera.position.lerp(vector.set(torso.x + 10, torso.y + 8.5, torso.z - 15), 0.035);
-      look.lerp(vector.set(torso.x, torso.y * 0.35 + 0.7, torso.z + 5), 0.04);
+    if (body && selectedRig && follow) {
+      selectedRig.getFocus(focus);
+      camera.position.lerp(
+        vector.set(focus.x + 10, focus.y + 8.5, focus.z - 15),
+        dampingAlpha(6.5, deltaSeconds),
+      );
+      look.lerp(
+        vector.set(focus.x, focus.y * 0.35 + 0.7, focus.z + 5),
+        dampingAlpha(7, deltaSeconds),
+      );
     } else {
       const previewZ = activeChallenge === CHALLENGE.Difficult ? -17 : -19;
-      camera.position.lerp(vector.set(14, 14, previewZ), 0.025);
-      look.lerp(vector.set(0, 1.2, 8), 0.03);
+      camera.position.lerp(vector.set(14, 14, previewZ), dampingAlpha(3.5, deltaSeconds));
+      look.lerp(vector.set(0, 1.2, 8), dampingAlpha(4, deltaSeconds));
     }
     camera.lookAt(look);
     renderer.render(scene, camera);

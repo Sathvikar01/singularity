@@ -621,7 +621,10 @@ function frame(timestamp: number) {
   }
   renderBodies.clear();
   for (const team of view.teams) renderBodies.set(team.number, team.body);
-  scene.update(renderBodies, view.room?.team ?? 0, timestamp / 1000);
+  const attemptId = view.room
+    ? `${view.room.code}:${view.room.matchId ?? "lobby"}`
+    : `${view.mode}:${view.setup.challenge}:${view.setup.crewSize}`;
+  scene.update(renderBodies, view.room?.team ?? 0, attemptId, timestamp / 1000, delta);
   requestAnimationFrame(frame);
 }
 

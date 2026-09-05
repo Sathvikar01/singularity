@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import type { Body } from "../shared/physics";
+import { BodyPoseSampler, dampingAlpha } from "./body-pose";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -39,7 +40,9 @@ function setSegment(
 export interface CharacterRig {
   root: THREE.Group;
   setVisible(visible: boolean): void;
-  update(body: Body, time: number, preview: boolean): void;
+  update(attemptId: string, body: Body, time: number, deltaSeconds: number, preview: boolean): void;
+  getFocus(target: THREE.Vector3): THREE.Vector3;
+  getRenderTick(): number;
 }
 
 /**
@@ -310,21 +313,17 @@ export function createCharacter(
   const elbowsTarget = [new THREE.Vector3(), new THREE.Vector3()];
   const hips = [new THREE.Vector3(), new THREE.Vector3()];
   const kneesTarget = [new THREE.Vector3(), new THREE.Vector3()];
-  const nodeTargets = Array.from({ length: 6 }, () => new THREE.Vector3());
-  const payloadPositions = [new THREE.Vector3(), new THREE.Vector3()];
-  const cargoTarget = new THREE.Vector3();
   const direction = new THREE.Vector3();
   const offset = new THREE.Vector3();
   const neckStart = new THREE.Vector3();
   const neckEnd = new THREE.Vector3();
-  let initialized = false;
+  const poseSampler = new BodyPoseSampler();
+  let renderTick = 0;
+  let headYaw = 0;
 
-  function readNode(target: THREE.Vector3, body: Body, index: number) {
-    const node = body.nodes[index];
-    nodeTargets[index].set(node.x, node.y, node.z);
-    return initialized
-      ? target.lerp(nodeTargets[index], 0.5)
-      : target.copy(nodeTargets[index]);
+  function readPoint(target: THREE.Vector3, positions: Float64Array, index: number) {
+    const offset = index * 3;
+    return target.set(positions[offset], positions[offset + 1], positions[offset + 2]);
   }
 
   function setExpression(body: Body, time: number) {
@@ -358,15 +357,18 @@ export function createCharacter(
   return {
     root,
     setVisible(visible) {
+      if (!visible && root.visible) poseSampler.reset();
       root.visible = visible;
     },
-    update(body, time, preview) {
-      readNode(torsoPosition, body, 0);
-      readNode(headPosition, body, 1);
-      readNode(handPositions[0], body, 2);
-      readNode(handPositions[1], body, 3);
-      readNode(footPositions[0], body, 4);
-      readNode(footPositions[1], body, 5);
+    update(attemptId, body, time, deltaSeconds, preview) {
+      const sampled = poseSampler.update(attemptId, body, time);
+      renderTick = sampled.tick;
+      readPoint(torsoPosition, sampled.positions, 0);
+      readPoint(headPosition, sampled.positions, 1);
+      readPoint(handPositions[0], sampled.positions, 2);
+      readPoint(handPositions[1], sampled.positions, 3);
+      readPoint(footPositions[0], sampled.positions, 4);
+      readPoint(footPositions[1], sampled.positions, 5);
 
       chest.position.copy(torsoPosition).addScaledVector(UP, 0.1);
       chest.rotation.y = preview ? Math.PI : 0;
@@ -376,7 +378,11 @@ export function createCharacter(
       neckEnd.copy(headPosition).addScaledVector(UP, -0.38);
       setSegment(neck, neckStart, neckEnd, 0.18, direction);
       head.position.copy(headPosition);
-      head.rotation.y = body.look + (preview ? Math.PI : 0);
+      const targetHeadYaw = sampled.look + (preview ? Math.PI : 0);
+      headYaw = sampled.snapped
+        ? targetHeadYaw
+        : headYaw + angleDelta(targetHeadYaw, headYaw) * dampingAlpha(18, deltaSeconds);
+      head.rotation.y = headYaw;
       setExpression(body, time);
 
       for (let side = 0; side < 2; side++) {
@@ -435,21 +441,27 @@ export function createCharacter(
       }
 
       payloads.forEach((payload, index) => {
-        const object = body.objects[index];
-        payload.group.visible = Boolean(object);
-        if (!object) return;
-        cargoTarget.set(object.x, object.y, object.z);
-        if (initialized) payloadPositions[index].lerp(cargoTarget, 0.5);
-        else payloadPositions[index].copy(cargoTarget);
-        payload.group.position.copy(payloadPositions[index]);
+        payload.group.visible = index < sampled.objectCount;
+        if (!payload.group.visible) return;
+        readPoint(payload.group.position, sampled.positions, sampled.nodeCount + index);
         payload.group.rotation.y = time * (0.18 + index * 0.05);
         payload.crate.visible = body.challenge === 0;
         payload.cell.visible = body.challenge === 1;
         payload.core.visible = body.challenge === 2;
       });
       ring.position.set(torsoPosition.x, 0.06, torsoPosition.z);
-      ring.scale.setScalar(body.brace ? 1.5 : 1);
-      initialized = true;
+      const ringScale = ring.scale.x + ((body.brace ? 1.5 : 1) - ring.scale.x) * dampingAlpha(12, deltaSeconds);
+      ring.scale.setScalar(ringScale);
+    },
+    getFocus(target) {
+      return target.copy(torsoPosition);
+    },
+    getRenderTick() {
+      return renderTick;
     },
   };
+}
+
+function angleDelta(target: number, current: number) {
+  return Math.atan2(Math.sin(target - current), Math.cos(target - current));
 }
