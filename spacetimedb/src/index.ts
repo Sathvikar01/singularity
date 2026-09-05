@@ -15,6 +15,8 @@ import {
   assignmentConflict,
   phasePolicy,
   planMatchStart,
+  planMatchTick,
+  raceEndReason,
   type MatchAssignment,
   type MatchMember,
 } from "../../shared/match-lifecycle";
@@ -266,17 +268,32 @@ export const start = db.reducer((ctx) => {
     if (!activeTeams.has(q.team)) ctx.db.player.id.delete(q.id);
     else ctx.db.player.id.update({ ...q, x: 0, z: 0, action: false, seen: 0n });
   }
+  const resetTeams = new Set<number>();
   for (const tm of ctx.db.team.iter()) {
     if (tm.room !== r.id) continue;
     if (!activeTeams.has(tm.number)) ctx.db.team.id.delete(tm.id);
-    else ctx.db.team.id.update({
+    else {
+      resetTeams.add(tm.number);
+      ctx.db.team.id.update({
         ...tm,
         body: encodeSnapshot(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
         challenge: r.challenge,
         crewSize: r.crewSize,
-    });
+      });
+    }
   }
+  for (const number of activeTeams)
+    if (!resetTeams.has(number))
+      ctx.db.team.insert({
+        id: `${r.id}:${number}`,
+        room: r.id,
+        number,
+        body: encodeSnapshot(createBody(r.challenge, r.crewSize)),
+        finishMs: 0,
+        challenge: r.challenge,
+        crewSize: r.crewSize,
+      });
   ctx.db.room.id.update({
     ...r,
     state: "countdown",
@@ -310,45 +327,74 @@ export const simulate = db.reducer(
     for (const r0 of ctx.db.room.iter()) {
       let r = r0;
       const members = players.filter((p) => p.room === r.id);
-      if (!members.some(p => p.online)) {
+      const roomTeams = [...ctx.db.team.iter()].filter(tm => tm.room === r.id);
+      const plan = planMatchTick({
+        phase: r.state,
+        nowMicros: time,
+        startAtMicros: r.startAt,
+        hostId: r.host.toHexString(),
+        members: members.map(lifecycleMember),
+        teams: roomTeams.map(tm => ({ number: tm.number, finished: tm.finishMs > 0 })),
+      });
+      const purgeMembers = new Set(plan.purgeMemberIds);
+      const abandonedTeams = new Set(plan.abandonedTeamNumbers);
+      if (plan.deleteRoom) {
         for (const p of members) ctx.db.player.id.delete(p.id);
-        for (const tm of ctx.db.team.iter())
-          if (tm.room === r.id) ctx.db.team.id.delete(tm.id);
+        for (const tm of roomTeams) ctx.db.team.id.delete(tm.id);
         ctx.db.room.id.delete(r.id);
         continue;
       }
-      if (!members.some((p) => p.online && p.id.isEqual(r.host))) {
-        r = { ...r, host: members.find(p => p.online)!.id };
+      for (const p of members)
+        if (purgeMembers.has(p.id.toHexString())) ctx.db.player.id.delete(p.id);
+      for (const tm of roomTeams)
+        if (abandonedTeams.has(tm.number)) ctx.db.team.id.delete(tm.id);
+
+      const retainedMembers = members.filter(p => !purgeMembers.has(p.id.toHexString()));
+      const retainedTeams = roomTeams.filter(tm => !abandonedTeams.has(tm.number));
+      const nextHost = plan.nextHostId === null
+        ? undefined
+        : retainedMembers.find(p => p.id.toHexString() === plan.nextHostId)?.id;
+      if (r.state !== plan.phase || (nextHost && !r.host.isEqual(nextHost))) {
+        r = { ...r, state: plan.phase, host: nextHost ?? r.host };
         ctx.db.room.id.update(r);
       }
-      if (r.state === "countdown" && time >= r.startAt) {
-        r = { ...r, state: "racing" };
+      const finishRoom = () => {
+        for (const p of retainedMembers)
+          if (!p.online) ctx.db.player.id.delete(p.id);
+        r = { ...r, state: "finished" };
         ctx.db.room.id.update(r);
+      };
+      if (plan.finishReason) {
+        finishRoom();
+        continue;
       }
-      if (r.state !== "racing") continue;
+      if (plan.simulateTeamNumbers.length === 0) {
+        if (plan.phase === "racing" && raceEndReason({
+          nowMicros: time,
+          startAtMicros: r.startAt,
+          contendingTeamNumbers: plan.contendingTeamNumbers,
+          teams: retainedTeams.map(tm => ({ number: tm.number, finished: tm.finishMs > 0 })),
+        })) finishRoom();
+        continue;
+      }
       if (!isChallenge(r.challenge) || !isCrewSize(r.crewSize) || r.ruleset !== RULESET) {
-        ctx.db.room.id.update({ ...r, state: "finished" });
+        finishRoom();
         continue;
       }
       const roomRoles = rolesFor(r.crewSize);
-      let active = 0,
-        finished = 0;
-      for (const tm of ctx.db.team.iter()) {
-        if (tm.room !== r.id || !members.some((p) => p.team === tm.number))
-          continue;
-        active++;
-        if (tm.finishMs) {
-          finished++;
-          continue;
-        }
+      const simulationTeams = new Set(plan.simulateTeamNumbers);
+      const teamState = retainedTeams.map(tm => ({ number: tm.number, finished: tm.finishMs > 0 }));
+      let corrupt = false;
+      for (const tm of retainedTeams) {
+        if (!simulationTeams.has(tm.number)) continue;
         const snapshot = decodeSnapshot(tm.body, { version: r.ruleset, challenge: r.challenge, crewSize: r.crewSize });
         if (!snapshot.ok || tm.challenge !== r.challenge || tm.crewSize !== r.crewSize) {
-          ctx.db.room.id.update({ ...r, state: "finished" });
-          continue;
+          corrupt = true;
+          break;
         }
         const b = snapshot.body;
         const inputs = neutralInputs(r.crewSize);
-        for (const p of members)
+        for (const p of retainedMembers)
           if (p.online && p.team === tm.number && p.role < roomRoles.length && time - p.seen < 500000n)
             inputs[p.role] = { x: p.x, z: p.z, action: p.action };
         step(b, inputs);
@@ -363,13 +409,14 @@ export const simulate = db.reducer(
           challenge: r.challenge,
           crewSize: r.crewSize,
         });
+        const progress = teamState.find(team => team.number === tm.number)!;
+        progress.finished = finishMs > 0;
         if (finishMs) {
-          finished++;
           ctx.db.result.insert({
             id: 0n,
             room: r.id,
             team: tm.number,
-            names: members
+            names: retainedMembers
               .filter((p) => p.team === tm.number)
               .map((p) => p.name)
               .join(", "),
@@ -381,8 +428,12 @@ export const simulate = db.reducer(
           });
         }
       }
-      if ((active > 0 && finished === active) || time - r.startAt > 600000000n)
-        ctx.db.room.id.update({ ...r, state: "finished" });
+      if (corrupt || raceEndReason({
+        nowMicros: time,
+        startAtMicros: r.startAt,
+        contendingTeamNumbers: plan.contendingTeamNumbers,
+        teams: teamState,
+      })) finishRoom();
     }
   },
 );

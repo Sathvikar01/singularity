@@ -20,6 +20,7 @@ try {
   const report = await page.evaluate(async ({ server, database }) => {
     const { DbConnection } = await import("/src/module_bindings/index.ts");
     const { CHALLENGE, RULESET, rolesFor, teammateInputs } = await import("/shared/physics.ts");
+    const { DISCONNECT_GRACE_MICROS } = await import("/shared/match-lifecycle.ts");
     const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
     const check = (ok, message) => { if (!ok) throw new Error(message); };
     const reject = async (operation, message) => {
@@ -261,7 +262,13 @@ try {
         check(resetTeam.challenge === challenge && resetTeam.crewSize === crewSize, `${label} rematch lost its category`);
 
         await Promise.all(clients.map(client => client.reducers.leave({})));
-        await waitFor(() => !observer.db.room.id.find(code), `${label} empty room was not removed`, 5000);
+        await wait(100);
+        check(observer.db.room.id.find(code), `${label} skipped its reconnect grace after a whole-crew drop`);
+        await waitFor(
+          () => !observer.db.room.id.find(code),
+          `${label} empty room was not removed after reconnect grace`,
+          Number(DISCONNECT_GRACE_MICROS / 1000n) + 3000,
+        );
         check([...observer.db.player.iter()].every(player => player.room !== code), `${label} role leases were not cleaned`);
         check([...observer.db.team.iter()].every(team => team.room !== code), `${label} team rows were not cleaned`);
         check([...observer.db.result.iter()].filter(row => row.room === code).length === 1, `${label} persisted result was lost`);
@@ -277,12 +284,90 @@ try {
       }
     };
 
+    const verifyAbandonedTeamDoesNotBlock = async () => {
+      const connections = [];
+      const clients = [[], []];
+      const code = `A30${nonce}`;
+      let observer;
+      try {
+        for (let team = 0; team < 2; team++) {
+          for (let role = 0; role < 3; role++) {
+            const session = await open();
+            connections.push(session.connection);
+            clients[team].push(session.connection);
+          }
+        }
+        observer = (await open(undefined, [
+          `SELECT * FROM room WHERE id = '${code}'`,
+          `SELECT * FROM player WHERE room = '${code}'`,
+          `SELECT * FROM team WHERE room = '${code}'`,
+          `SELECT * FROM result WHERE room = '${code}'`,
+        ])).connection;
+        connections.push(observer);
+        for (let team = 0; team < 2; team++)
+          for (let role = 0; role < 3; role++)
+            await clients[team][role].reducers.join({
+              code,
+              name: `Abandonment T${team + 1} Pilot ${role + 1}`,
+              teamNumber: team,
+              role,
+              ruleset: RULESET,
+              challenge: CHALLENGE.Easy,
+              crewSize: 3,
+            });
+        await waitFor(
+          () => [...observer.db.player.iter()].filter(player => player.room === code && player.online).length === 6,
+          "two-team abandonment room did not fill",
+        );
+        await clients[0][0].reducers.start({});
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "racing",
+          "two-team abandonment room did not start",
+          7000,
+        );
+        await Promise.all(clients[1].map(client => client.reducers.leave({})));
+        await waitFor(
+          () => [...observer.db.player.iter()].filter(player => player.room === code && player.team === 1)
+            .every(player => !player.online),
+          "abandoned team did not retain offline leases during grace",
+        );
+
+        const finishDeadline = Date.now() + 45000;
+        let result;
+        while (Date.now() < finishDeadline) {
+          result = [...observer.db.result.iter()].find(row => row.room === code && row.team === 0);
+          if (result) break;
+          const row = observer.db.team.id.find(`${code}:0`);
+          check(row, "connected team disappeared while its competitor was offline");
+          const inputs = teammateInputs(JSON.parse(row.body));
+          await Promise.all(inputs.map((input, role) => clients[0][role].reducers.input(input)));
+          await wait(50);
+        }
+        check(result, "connected team did not finish the abandonment scenario");
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "finished",
+          "abandoned unfinished team blocked match completion",
+        );
+        check(!observer.db.team.id.find(`${code}:1`), "abandoned team row survived its grace period");
+        check(
+          [...observer.db.player.iter()].every(player => player.room !== code || player.team !== 1),
+          "abandoned role leases survived their grace period",
+        );
+
+        await Promise.all(clients[0].map(client => client.reducers.leave({})));
+        await waitFor(() => !observer.db.room.id.find(code), "finished abandonment room was not cleaned", 5000);
+      } finally {
+        connections.forEach(connection => connection.disconnect());
+      }
+    };
+
     const scenarios = [
       { label: "Difficult / 3-player", challenge: CHALLENGE.Difficult, crewSize: 3, exerciseReconnect: false },
       { label: "Easy / 5-player", challenge: CHALLENGE.Easy, crewSize: 5, exerciseReconnect: true },
     ];
     const results = [];
     for (const scenario of scenarios) results.push(await runRoom(scenario));
+    await verifyAbandonedTeamDoesNotBlock();
     check(
       new Set(results.map(result => `${result.challenge}:${result.crewSize}`)).size === scenarios.length,
       "ranked results were not separated by challenge and crew size",
@@ -296,7 +381,7 @@ try {
   );
   assert.ok(report.every(result => Number.isInteger(result.timeMs) && result.timeMs > 0));
   console.log(
-    "PASS: dynamic 3/5-player readiness, room configuration locks, reconnect/input guards, authoritative finishes, and challenge/crew-categorized persistent results.",
+    "PASS: dynamic 3/5-player readiness, locks, reconnect grace, abandonment quorum, authoritative finishes, and categorized results.",
     report,
   );
 } finally {

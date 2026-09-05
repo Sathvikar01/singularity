@@ -48,6 +48,14 @@ The lobby and competition context that fixes the Challenge and Crew size for its
 
 One Crew and its Shared Body within a Room. Several Teams may attempt the same Challenge concurrently.
 
+## Contending Team
+
+A Team that remains in an active match because it has a connected pilot, has already finished, or is inside the brief whole-Crew reconnect grace. A wholly disconnected unfinished Team forfeits after that grace and no longer blocks the other Teams' result.
+
+## Role Lease
+
+The identity-bound ownership of one Role during countdown and racing. Disconnecting neutralizes that pilot's input but preserves the assignment briefly so the same identity can reconnect without allowing a replacement or Role switch.
+
 ## Match Lifecycle
 
 The policy governing a Room from joining and Role assignment through readiness, racing, results, rematch, reconnection, and expiry.
