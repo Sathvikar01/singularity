@@ -1,117 +1,37 @@
-export const DT = 1 / 30;
+import {
+  CHALLENGE,
+  SIMULATION_HZ,
+  challengeFor,
+  courseFor,
+  finalAlignment,
+  groundAt,
+  hazardX,
+  isChallenge,
+  isCrewSize,
+  platformCenter,
+  type ChallengeId,
+  type CrewSize,
+} from "./course.ts";
+
+export {
+  CHALLENGE,
+  CHALLENGES,
+  COURSE,
+  COURSE_DEFINITIONS,
+  CREW_SIZES,
+  challengeFor,
+  courseFor,
+  finalAlignment,
+  groundAt,
+  hazardX,
+  isChallenge,
+  isCrewSize,
+  platformCenter,
+} from "./course.ts";
+export type { Challenge, ChallengeId, CourseDefinition, CrewSize, Stage, StageKind } from "./course.ts";
+
+export const DT = 1 / SIMULATION_HZ;
 export const RULESET = 3;
-
-export const CHALLENGE = { Easy: 0, Medium: 1, Difficult: 2 } as const;
-export type ChallengeId = (typeof CHALLENGE)[keyof typeof CHALLENGE];
-export type CrewSize = 3 | 5;
-export const CREW_SIZES = [3, 5] as const;
-
-export type StageKind =
-  | "relay"
-  | "bridge"
-  | "delivery"
-  | "switches"
-  | "storm"
-  | "finish"
-  | "walk"
-  | "duck"
-  | "lift"
-  | "movingCarry"
-  | "narrowCarry"
-  | "balance"
-  | "climbLatch"
-  | "climb"
-  | "unstable"
-  | "precisionLift"
-  | "unstableCarry"
-  | "placeFirst"
-  | "secondLift"
-  | "placeSecond"
-  | "finalTiming";
-
-export type Stage = {
-  name: string;
-  hint: string;
-  gate: number;
-  spawn: number;
-  kind: StageKind;
-};
-
-export type Challenge = {
-  id: ChallengeId;
-  difficulty: "Easy" | "Medium" | "Difficult";
-  name: string;
-  environment: string;
-  summary: string;
-  accent: string;
-  fallPenaltyMs: number;
-  timingPenaltyMs: number;
-  stages: readonly Stage[];
-};
-
-export const CHALLENGES: readonly Challenge[] = [
-  {
-    id: CHALLENGE.Easy,
-    difficulty: "Easy",
-    name: "Suspended Disbelief",
-    environment: "Orbital training facility / Sector 07",
-    summary: "Learn the body: relays, balance, one careful delivery, and a clean finish.",
-    accent: "#91dfc5",
-    fallPenaltyMs: 3000,
-    timingPenaltyMs: 0,
-    stages: [
-      { name: "First contact", hint: "Both hands: touch the amber relay and hold grip together", gate: 5, spawn: 0, kind: "relay" },
-      { name: "Hold the line", hint: "Torso: brace at the far end of the windy bridge", gate: 16, spawn: 6, kind: "bridge" },
-      { name: "Special delivery", hint: "Both hands: carry the crate onto the mint pad, then release", gate: 26, spawn: 17, kind: "delivery" },
-      { name: "Two to tango", hint: "Both feet: hold your switches at the same time", gate: 33, spawn: 28, kind: "switches" },
-      { name: "Storm watch", hint: "Hands on both relays while Torso braces beyond the sweeper", gate: 47, spawn: 35, kind: "storm" },
-      { name: "Home stretch", hint: "Keep your balance and bring the whole body through the finish", gate: 60, spawn: 49, kind: "finish" },
-    ],
-  },
-  {
-    id: CHALLENGE.Medium,
-    difficulty: "Medium",
-    name: "Freight Expectations",
-    environment: "Cyclone cargo yard / Monsoon deck",
-    summary: "A longer freight run through low gantries, moving sweepers, and a narrow carry lane.",
-    accent: "#69d9ff",
-    fallPenaltyMs: 5000,
-    timingPenaltyMs: 0,
-    stages: [
-      { name: "Walking papers", hint: "Legs set the pace while Torso keeps the body centered", gate: 8, spawn: 0, kind: "walk" },
-      { name: "Duckworks", hint: "Torso: hold bend and coordinate a low walk under the pipe rack", gate: 21, spawn: 9, kind: "duck" },
-      { name: "Team lift", hint: "Bring both hands to the power cell and grip together", gate: 32, spawn: 22, kind: "lift" },
-      { name: "Pendulum passage", hint: "Carry the cell past the moving sweepers without losing either hand", gate: 49, spawn: 33, kind: "movingCarry" },
-      { name: "Thread the needle", hint: "Stay on the narrow zig-zag lane and keep the cell secure", gate: 65, spawn: 50, kind: "narrowCarry" },
-      { name: "Soft landing", hint: "Lower the cell onto the blue dock and release both hands", gate: 78, spawn: 66, kind: "delivery" },
-      { name: "Gimbal walk", hint: "Both feet push while Torso braces across the shifting deck", gate: 90, spawn: 79, kind: "balance" },
-      { name: "Clock out", hint: "Bring every part of the body through the cargo gate", gate: 104, spawn: 92, kind: "finish" },
-    ],
-  },
-  {
-    id: CHALLENGE.Difficult,
-    difficulty: "Difficult",
-    name: "The Coordination Tax",
-    environment: "Solar foundry / Rupture tower",
-    summary: "Climb, cross unstable plates, seat two cores precisely, then commit on the launch beat.",
-    accent: "#ff9b73",
-    fallPenaltyMs: 8000,
-    timingPenaltyMs: 7000,
-    stages: [
-      { name: "Wall handshake", hint: "Each hand takes one climbing latch; hold together to unlock the wall", gate: 8, spawn: 0, kind: "climbLatch" },
-      { name: "Vertical argument", hint: "Legs climb the staggered blocks while both hands keep contact", gate: 20, spawn: 9, kind: "climb" },
-      { name: "Loose orbit", hint: "Cross the unstable plates with both feet active and Torso braced", gate: 34, spawn: 22, kind: "unstable" },
-      { name: "Zero margin", hint: "Center both hands precisely on the first reactor core", gate: 45, spawn: 35, kind: "precisionLift" },
-      { name: "Shiver carry", hint: "Carry the core across the wandering plates without breaking grip", gate: 62, spawn: 46, kind: "unstableCarry" },
-      { name: "Socket one", hint: "Place the first core in the left socket and release cleanly", gate: 72, spawn: 63, kind: "placeFirst" },
-      { name: "Second payload", hint: "Coordinate another precise two-hand lift", gate: 82, spawn: 73, kind: "secondLift" },
-      { name: "Twin lock", hint: "Carry the second core into the right socket and let go together", gate: 94, spawn: 83, kind: "placeSecond" },
-      { name: "Launch window", hint: "Wait for ALIGN, then every pilot holds ACT on the same beat", gate: 108, spawn: 96, kind: "finalTiming" },
-    ],
-  },
-] as const;
-
-export const COURSE = CHALLENGES[CHALLENGE.Easy].stages;
 
 export type RoleDefinition = {
   name: string;
@@ -133,18 +53,6 @@ const FIVE_PLAYER_ROLES: readonly RoleDefinition[] = [
   { name: "Left Leg", help: "WASD drives the left foot · ACT hops or holds its switch", action: "L STEP", icon: "L⌁" },
   { name: "Right Leg", help: "WASD drives the right foot · ACT hops or holds its switch", action: "R STEP", icon: "⌁R" },
 ];
-
-export function isChallenge(value: number): value is ChallengeId {
-  return Number.isInteger(value) && value >= CHALLENGE.Easy && value <= CHALLENGE.Difficult;
-}
-
-export function isCrewSize(value: number): value is CrewSize {
-  return value === 3 || value === 5;
-}
-
-export function challengeFor(value: number): Challenge {
-  return CHALLENGES[isChallenge(value) ? value : CHALLENGE.Easy];
-}
 
 export function rolesFor(value: number): readonly RoleDefinition[] {
   return value === 3 ? THREE_PLAYER_ROLES : FIVE_PLAYER_ROLES;
@@ -186,29 +94,18 @@ export const neutralInput = (): Input => ({ x: 0, z: 0, action: false });
 export const neutralInputs = (crewSize: number = 5): Input[] => rolesFor(crewSize).map(neutralInput);
 const node = (x: number, y: number, z: number): Node => ({ x, y, z, px: x, py: y, pz: z });
 
-const OBJECT_SPAWNS: Record<ChallengeId, readonly [number, number, number][]> = {
-  [CHALLENGE.Easy]: [[0, 0.45, 19]],
-  [CHALLENGE.Medium]: [[0, 0.45, 25]],
-  [CHALLENGE.Difficult]: [[0, 0.65, 39], [0, 0.65, 76]],
-};
-
-const OBJECT_DOCKS: Record<ChallengeId, readonly [number, number, number][]> = {
-  [CHALLENGE.Easy]: [[0, 0.45, 25.7]],
-  [CHALLENGE.Medium]: [[0, 0.45, 76.2]],
-  [CHALLENGE.Difficult]: [[-1.55, 0.65, 70.5], [1.55, 0.65, 92.2]],
-};
-
 export function createBody(challenge: number = CHALLENGE.Easy, crewSize: number = 5, z?: number): Body {
   const challengeId = isChallenge(challenge) ? challenge : CHALLENGE.Easy;
   const size = isCrewSize(crewSize) ? crewSize : 5;
-  const start = z ?? challengeFor(challengeId).stages[0].spawn;
+  const course = courseFor(challengeId);
+  const start = z ?? course.stages[0].spawn;
   return {
     version: RULESET,
     challenge: challengeId,
     crewSize: size,
     nodes: [node(0, 2, start), node(0, 3, start), node(-1, 2, start), node(1, 2, start), node(-0.45, 0.35, start), node(0.45, 0.35, start)],
-    objects: OBJECT_SPAWNS[challengeId].map(([x, y, objectZ]) => node(x, y, objectZ)),
-    placed: OBJECT_SPAWNS[challengeId].map(() => false),
+    objects: course.payloads.map(({ spawn: [x, y, objectZ] }) => node(x, y, objectZ)),
+    placed: course.payloads.map(() => false),
     handGrip: [-1, -1],
     stage: 0,
     falls: 0,
@@ -234,47 +131,6 @@ export const LINKS = [
 
 export const clamp = (v: number, min = -1, max = 1) => Math.max(min, Math.min(max, v));
 export const angleDelta = (target: number, current: number) => Math.atan2(Math.sin(target - current), Math.cos(target - current));
-
-export function platformCenter(challenge: number, z: number, ticks: number) {
-  if (challenge === CHALLENGE.Medium && z > 80 && z < 91) return Math.sin(ticks * DT * 0.9) * 1.15;
-  if (challenge === CHALLENGE.Difficult && z > 21 && z < 35) return Math.sin(ticks * DT * 0.75 + Math.floor((z - 21) / 4) * 1.7) * 1.35;
-  if (challenge === CHALLENGE.Difficult && z > 46 && z < 63) return Math.sin(ticks * DT * 1.05 + Math.floor((z - 46) / 4) * 1.4) * 1.1;
-  return 0;
-}
-
-export function hazardX(challenge: number, index: number, ticks: number) {
-  const speeds = challenge === CHALLENGE.Medium ? [1.45, 1.9] : challenge === CHALLENGE.Difficult ? [1.7, 2.15] : [1.8];
-  const amplitudes = challenge === CHALLENGE.Difficult ? [3.8, 3.2] : [3.6, 3.15];
-  return Math.sin(ticks * DT * speeds[index % speeds.length] + index * 1.3) * amplitudes[index % amplitudes.length];
-}
-
-export function finalAlignment(ticks: number) {
-  return Math.cos(ticks * DT * 1.35);
-}
-
-export function groundAt(challenge: number, x: number, z: number, ticks = 0) {
-  if (!isChallenge(challenge)) return -30;
-  if (challenge === CHALLENGE.Easy) {
-    if (z > 7 && z < 15) return Math.abs(x) < 1.3 ? 0 : -30;
-    return Math.abs(x) < 4.6 && z > -5 && z < 65 ? 0 : -30;
-  }
-  if (challenge === CHALLENGE.Medium) {
-    if (z > 34 && z < 49) return Math.abs(x) < 2.15 ? 0 : -30;
-    if (z >= 50 && z < 66) {
-      const center = Math.sin(z * 0.72) * 0.72;
-      return Math.abs(x - center) < 1.18 ? 0 : -30;
-    }
-    if (z > 80 && z < 91) return Math.abs(x - platformCenter(challenge, z, ticks)) < 1.7 ? 0 : -30;
-    return Math.abs(x) < 4.8 && z > -5 && z < 109 ? 0 : -30;
-  }
-  if (z > 9 && z <= 21) {
-    const step = Math.min(4, Math.max(0, Math.floor((z - 9) / 3)));
-    return Math.abs(x) < 2.2 ? step * 0.48 : -30;
-  }
-  if ((z > 21 && z < 35) || (z > 46 && z < 63)) return Math.abs(x - platformCenter(challenge, z, ticks)) < 1.55 ? (z < 35 ? 1.92 : 0.35) : -30;
-  if (z > 35 && z <= 46) return Math.abs(x) < 2.45 ? 0.35 : -30;
-  return Math.abs(x) < 4.8 && z > -5 && z < 113 ? 0 : -30;
-}
 
 function sanitizeInputs(body: Body, raw: Input[]) {
   return neutralInputs(body.crewSize).map((_, i) => ({
@@ -316,7 +172,7 @@ function resetObjectAtCheckpoint(body: Body, objectIndex: number) {
   if (body.placed[objectIndex]) return;
   const stage = challengeFor(body.challenge).stages[body.stage];
   const carrying = ["movingCarry", "narrowCarry", "unstableCarry"].includes(stage?.kind ?? "");
-  const spawn = OBJECT_SPAWNS[body.challenge][objectIndex];
+  const spawn = courseFor(body.challenge).payloads[objectIndex].spawn;
   const x = carrying ? 0 : spawn[0];
   const y = carrying ? groundAt(body.challenge, x, stage.spawn + 1.8, body.ticks) + 0.6 : spawn[1];
   const z = carrying ? stage.spawn + 1.8 : spawn[2];
@@ -387,7 +243,7 @@ function updateObjects(body: Body, controls: CanonicalInputs) {
   for (let index = 0; index < body.objects.length; index++) {
     const object = body.objects[index];
     if (body.placed[index]) {
-      const dock = OBJECT_DOCKS[body.challenge][index];
+      const dock = courseFor(body.challenge).payloads[index].dock;
       pin(object, dock[0], dock[1], dock[2]);
       continue;
     }
@@ -407,12 +263,9 @@ function updateObjects(body: Body, controls: CanonicalInputs) {
 
 function applyHazards(body: Body) {
   const torso = body.nodes[0];
-  const hits: [number, number][] = body.challenge === CHALLENGE.Easy
-    ? [[42.5, hazardX(body.challenge, 0, body.ticks)]]
-    : body.challenge === CHALLENGE.Medium
-      ? [[41, hazardX(body.challenge, 0, body.ticks)], [58, hazardX(body.challenge, 1, body.ticks)]]
-      : [[29, hazardX(body.challenge, 0, body.ticks)], [54, hazardX(body.challenge, 1, body.ticks)]];
-  for (const [z, x] of hits) {
+  for (const [index, hazard] of courseFor(body.challenge).hazards.entries()) {
+    const { z } = hazard;
+    const x = hazardX(body.challenge, index, body.ticks);
     if (Math.abs(torso.z - z) > 1.65 || Math.abs(torso.x - x) > 0.78) continue;
     const direction = Math.sign(torso.x - x) || Math.sign(Math.cos(body.ticks * DT)) || 1;
     const force = body.brace ? 0.02 : 0.14;
@@ -434,7 +287,7 @@ function stageProgress(body: Body, crewInputs: Input[], controls: CanonicalInput
     case "relay": charging = relayReady(body, stage.gate, handActions); break;
     case "bridge": charging = nearGate && body.brace && Math.abs(torso.x) < 0.85; break;
     case "delivery": {
-      const objectIndex = activeObjectIndex(body), dock = OBJECT_DOCKS[body.challenge][objectIndex], object = body.objects[objectIndex];
+      const objectIndex = activeObjectIndex(body), dock = courseFor(body.challenge).payloads[objectIndex].dock, object = body.objects[objectIndex];
       const released = body.handGrip.every(grip => grip !== objectIndex);
       charging = released && Math.hypot(object.x - dock[0], object.z - dock[2]) < (body.challenge === CHALLENGE.Easy ? 1.8 : 1.15) && object.y < dock[1] + 0.5;
       if (charging && body.charge + DT / chargeSeconds >= 1) body.placed[objectIndex] = true;
@@ -461,7 +314,7 @@ function stageProgress(body: Body, crewInputs: Input[], controls: CanonicalInput
     case "unstableCarry": charging = nearGate && securelyHeld(body, 0) && body.brace; break;
     case "placeFirst":
     case "placeSecond": {
-      const objectIndex = stage.kind === "placeFirst" ? 0 : 1, dock = OBJECT_DOCKS[body.challenge][objectIndex], object = body.objects[objectIndex];
+      const objectIndex = stage.kind === "placeFirst" ? 0 : 1, dock = courseFor(body.challenge).payloads[objectIndex].dock, object = body.objects[objectIndex];
       charging = body.handGrip.every(grip => grip !== objectIndex) && Math.hypot(object.x - dock[0], object.z - dock[2]) < 0.82 && Math.abs(object.y - dock[1]) < 0.65;
       chargeSeconds = 1.1;
       if (charging && body.charge + DT / chargeSeconds >= 1) body.placed[objectIndex] = true;
@@ -537,7 +390,7 @@ export function step(body: Body, raw: Input[]) {
 }
 
 function targetForStage(body: Body) {
-  const stage = challengeFor(body.challenge).stages[body.stage], objectIndex = activeObjectIndex(body), object = body.objects[objectIndex], dock = OBJECT_DOCKS[body.challenge][objectIndex];
+  const stage = challengeFor(body.challenge).stages[body.stage], objectIndex = activeObjectIndex(body), object = body.objects[objectIndex], dock = courseFor(body.challenge).payloads[objectIndex].dock;
   const placing = ["delivery", "placeFirst", "placeSecond"].includes(stage.kind);
   const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < 1.1;
   const needsObject = ["lift", "precisionLift", "secondLift"].includes(stage.kind) || (placing && !objectAtDock && !securelyHeld(body, objectIndex));
