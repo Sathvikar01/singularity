@@ -1,10 +1,76 @@
-import { test } from 'node:test';
-import { strict as assert } from 'node:assert';
-import { createBody, step, neutralInputs } from '../shared/physics.ts';
-test('simulation is deterministic and remains finite',()=>{const a=createBody(),b=createBody(); for(let i=0;i<300;i++){step(a,neutralInputs());step(b,neutralInputs());} assert.deepEqual(a,b); assert.ok(a.nodes.every(n=>Number.isFinite(n.x+n.y+n.z)));});
-test('leg input propels the shared body',()=>{const a=createBody();const input=neutralInputs();input[4].z=1;input[5].z=1; for(let i=0;i<100;i++)step(a,input);assert.ok(a.nodes[0].z>2);});
-test('checkpoints cannot be skipped',()=>{const a=createBody();for(const n of a.nodes)n.z+=45;step(a,neutralInputs());assert.equal(a.stage,0);});
-test('falls recover at checkpoint with penalty',()=>{const a=createBody();for(const n of a.nodes)n.y=-20;step(a,neutralInputs());assert.equal(a.falls,1);assert.ok(a.nodes[0].y>0);});
-test('coordinated legs and grabbing finish all three challenges',()=>{const a=createBody(),u=neutralInputs();u[4].z=u[5].z=1;u[1].action=u[2].action=true;for(let i=0;i<900&&!a.finished;i++)step(a,u);assert.equal(a.stage,3);assert.equal(a.delivered,true);assert.equal(a.finished,true);});
-test('walking without carrying cannot complete the race',()=>{const a=createBody(),u=neutralInputs();u[4].z=u[5].z=1;for(let i=0;i<900;i++)step(a,u);assert.equal(a.finished,false);assert.equal(a.stage,1);});
-test('finished bodies stop advancing their timer',()=>{const a=createBody();a.finished=true;step(a,neutralInputs());assert.equal(a.ticks,0);});
+import { test } from "node:test";
+import { strict as assert } from "node:assert";
+import { createBody, step, neutralInputs } from "../shared/physics.ts";
+test("simulation is deterministic and remains finite", () => {
+  const a = createBody(),
+    b = createBody();
+  for (let i = 0; i < 300; i++) {
+    step(a, neutralInputs());
+    step(b, neutralInputs());
+  }
+  assert.deepEqual(a, b);
+  assert.ok(a.nodes.every((n) => Number.isFinite(n.x + n.y + n.z)));
+});
+test("leg input propels the shared body", () => {
+  const a = createBody();
+  const input = neutralInputs();
+  input[4].z = 1;
+  input[5].z = 1;
+  for (let i = 0; i < 100; i++) step(a, input);
+  assert.ok(a.nodes[0].z > 2);
+});
+test("checkpoints cannot be skipped", () => {
+  const a = createBody();
+  for (const n of a.nodes) n.z += 45;
+  step(a, neutralInputs());
+  assert.equal(a.stage, 0);
+});
+test("falls recover at checkpoint with penalty", () => {
+  const a = createBody();
+  for (const n of a.nodes) n.y = -20;
+  step(a, neutralInputs());
+  assert.equal(a.falls, 1);
+  assert.ok(a.nodes[0].y > 0);
+});
+test("coordinated legs and grabbing finish all three challenges", () => {
+  const a = createBody(),
+    u = neutralInputs();
+  u[4].z = u[5].z = 1;
+  u[1].action = u[2].action = true;
+  for (let i = 0; i < 900 && !a.finished; i++) step(a, u);
+  assert.equal(a.stage, 3);
+  assert.equal(a.delivered, true);
+  assert.equal(a.finished, true);
+});
+test("walking without carrying cannot complete the race", () => {
+  const a = createBody(),
+    u = neutralInputs();
+  u[4].z = u[5].z = 1;
+  for (let i = 0; i < 900; i++) step(a, u);
+  assert.equal(a.finished, false);
+  assert.equal(a.stage, 1);
+});
+test("finished bodies stop advancing their timer", () => {
+  const a = createBody();
+  a.finished = true;
+  step(a, neutralInputs());
+  assert.equal(a.ticks, 0);
+});
+test("delivered cargo cannot trigger repeated fall resets", () => {
+  const b = createBody(28);
+  b.stage = 2;
+  b.delivered = true;
+  b.cube.y = -20;
+  for (let i = 0; i < 60; i++) step(b, neutralInputs());
+  assert.equal(b.falls, 0);
+});
+test("assisted practice recovers from sweepers and finishes", () => {
+  const b = createBody(),
+    u = neutralInputs();
+  u[4].z = u[5].z = 1;
+  u[3].z = 0.3;
+  u[1].action = u[2].action = true;
+  for (let i = 0; i < 1500 && !b.finished; i++) step(b, u);
+  assert.equal(b.finished, true);
+  assert.ok(b.falls < 10);
+});

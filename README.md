@@ -26,7 +26,7 @@ Create a callsign and room code, then share the invite link. Pick the same team 
 - **Falls:** checkpoint recovery and a three-second penalty. Ten-minute match limit.
 - **Solo practice:** assisted legs and balance; Space grabs with either arm. Practice is unranked.
 
-Desktop keyboard is recommended; narrow screens include touch controls. Teams race as separate colored bodies on the same course without inter-team collision.
+Desktop keyboard is recommended; narrow screens include touch controls. Teams race as separate colored bodies on the same course without inter-team collision. Reconnecting players can fill vacant roles on an existing team mid-race; switching teams mid-race is blocked. Use **Crew / rematch** to open the room controls.
 
 ## Architecture
 
