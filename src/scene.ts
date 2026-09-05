@@ -14,6 +14,7 @@ import type { Body } from "../shared/physics";
 import { createCharacter, type CharacterRig } from "./character";
 import { dampingAlpha } from "./body-pose";
 import type { GameFeedbackEvent, GameFeedbackKind } from "./game-feedback";
+import { configureDirectionalSun, DIRECTIONAL_SUN_OFFSET } from "./lighting";
 
 const TEAM_COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
 
@@ -47,12 +48,8 @@ export function createScene(container: HTMLElement) {
   const hemisphere = new THREE.HemisphereLight(0xd7f8ff, 0x344556, 2.7);
   scene.add(hemisphere);
   const sun = new THREE.DirectionalLight(0xffead6, 3.4);
-  sun.position.set(-15, 28, 10);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 90, bottom: -30, far: 140 });
-  sun.shadow.bias = -0.0005;
-  scene.add(sun);
+  configureDirectionalSun(sun);
+  scene.add(sun, sun.target);
   const courseLight = new THREE.PointLight(0x93ffdc, 42, 42);
   courseLight.position.set(0, 8, 7);
   scene.add(courseLight);
@@ -346,6 +343,9 @@ export function createScene(container: HTMLElement) {
   const look = new THREE.Vector3(0, 1, 6);
   const shakenLook = new THREE.Vector3();
   const cameraBase = camera.position.clone();
+  const sunOffset = new THREE.Vector3(...DIRECTIONAL_SUN_OFFSET);
+  const sunFocus = new THREE.Vector3();
+  const sunGoal = new THREE.Vector3();
   let follow = false;
   let activeChallenge: ChallengeId = CHALLENGE.Easy;
   let shakeTime = 0;
@@ -519,6 +519,11 @@ export function createScene(container: HTMLElement) {
       cameraBase.lerp(vector.set(14, 14, previewZ), dampingAlpha(3.5, deltaSeconds));
       look.lerp(vector.set(0, 1.2, 8), dampingAlpha(4, deltaSeconds));
     }
+    if (body && selectedRig && follow) sunFocus.set(focus.x, 0, focus.z);
+    else sunFocus.set(0, 0, 0);
+    const sunFollowAlpha = dampingAlpha(7, deltaSeconds);
+    sun.target.position.lerp(sunFocus, sunFollowAlpha);
+    sun.position.lerp(sunGoal.copy(sunFocus).add(sunOffset), sunFollowAlpha);
     updateParticles(deltaSeconds);
     cameraTrauma *= Math.exp(-7.5 * Math.min(Math.max(deltaSeconds, 0), 0.1));
     shakeTime += Math.min(Math.max(deltaSeconds, 0), 0.1) * 32;
