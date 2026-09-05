@@ -66,7 +66,7 @@ try {
     const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
     const mutationsPerSecond = domMutations / 2;
     assert.ok(mean <= 150, `challenge ${challenge} averaged ${mean.toFixed(1)} draw calls`);
-    assert.ok(mutationsPerSecond <= 150, `challenge ${challenge} produced ${mutationsPerSecond.toFixed(1)} DOM mutations/sec`);
+    assert.ok(mutationsPerSecond <= 120, `challenge ${challenge} produced ${mutationsPerSecond.toFixed(1)} DOM mutations/sec`);
     assert.deepEqual(pageErrors, []);
     results.push({
       challenge,
@@ -77,7 +77,7 @@ try {
     });
     await page.close();
   }
-  console.log(`PASS: warm draw-call budget ${JSON.stringify(results)}`);
+  console.log(`PASS: warm render budget ${JSON.stringify(results)}`);
 } finally {
   await browser.close();
 }
