@@ -152,6 +152,11 @@ test("ranked clocks, readiness, and input eligibility are derived from one view"
   session.synchronize(projection({ phase: "finished", startAtMs: 10_500, body: racingBody, finishMs: 4_321 }), "update");
   assert.equal(session.view(50_000).elapsedMs, 4_321);
 
+  racingBody.ticks = 90;
+  session.synchronize(projection({ phase: "finished", startAtMs: 10_500, body: racingBody, finishMs: 0 }), "update");
+  assert.equal(session.view(60_000).elapsedMs, 6_000);
+  assert.equal(session.view(120_000).elapsedMs, 6_000);
+
   const lobby = createRaceSession();
   lobby.synchronize(projection({ phase: "lobby" }), "adopt");
   assert.equal(lobby.view(0).canStart, true);

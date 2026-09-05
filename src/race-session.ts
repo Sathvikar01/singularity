@@ -402,9 +402,11 @@ export function createRaceSession(initial?: RaceSessionSnapshot): RaceSession {
     const playing = run.room.phase !== "lobby";
     const roleLocked = run.room.phase === "countdown" || run.room.phase === "racing";
     const countdownSeconds = run.room.phase === "countdown" ? Math.max(0, Math.ceil((run.room.startAtMs - nowMs) / 1000)) : 0;
-    const elapsed = team.finishMs || (run.room.phase === "racing" || run.room.phase === "finished"
-      ? Math.max(0, Math.round(nowMs - run.room.startAtMs)) + team.body.penaltyMs
-      : 0);
+    const elapsed = team.finishMs || (run.room.phase === "finished"
+      ? bodyElapsedMs(team.body)
+      : run.room.phase === "racing"
+        ? Math.max(0, Math.round(nowMs - run.room.startAtMs)) + team.body.penaltyMs
+        : 0);
     return {
       mode: "ranked",
       phase: run.room.phase,
