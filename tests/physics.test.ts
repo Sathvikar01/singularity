@@ -13,6 +13,7 @@ import {
   formatTime,
   isChallenge,
   isCrewSize,
+  isFinalAligned,
   neutralInputs,
   practiceInputs,
   rolesFor,
@@ -324,7 +325,7 @@ for (const crewSize of CREW_SIZES) {
 
     const aligned = createBody(CHALLENGE.Difficult, crewSize);
     placeAtStageGate(aligned, finalStage);
-    assert.ok(Math.abs(finalAlignment(aligned.ticks + 1)) > 0.94);
+    assert.ok(isFinalAligned(aligned.ticks + 1));
     step(aligned, neutralInputs(crewSize).map(input => ({ ...input, action: true })));
     assert.equal(aligned.mistakes, 0);
     assert.equal(aligned.penaltyMs, 0);
@@ -350,8 +351,7 @@ for (const crewSize of CREW_SIZES) {
 
     step(body, neutralInputs(crewSize));
     while (
-      !(Math.abs(finalAlignment(body.ticks)) <= 0.94 &&
-        Math.abs(finalAlignment(body.ticks + 1)) > 0.94)
+      !(!isFinalAligned(body.ticks) && isFinalAligned(body.ticks + 1))
     ) {
       step(body, neutralInputs(crewSize));
     }

@@ -1,4 +1,5 @@
 export const SIMULATION_HZ = 30;
+export const FINAL_ALIGNMENT_THRESHOLD = 0.94;
 
 export const CHALLENGE = { Easy: 0, Medium: 1, Difficult: 2 } as const;
 export type ChallengeId = (typeof CHALLENGE)[keyof typeof CHALLENGE];
@@ -63,6 +64,10 @@ export type PayloadDefinition = {
   spawn: readonly [x: number, y: number, z: number];
   dock: readonly [x: number, y: number, z: number];
   label: string;
+  settleRadius: number;
+  settleHeight: number;
+  approachRadius: number;
+  releaseRadius: number;
 };
 
 export type HazardDefinition = {
@@ -72,6 +77,14 @@ export type HazardDefinition = {
   speed: number;
   amplitude: number;
   phase: number;
+  hitHalfExtents: readonly [x: number, z: number];
+};
+
+export type FoundationDefinition = {
+  centerZ: number;
+  depth: number;
+  width: number;
+  centerY: number;
 };
 
 export type PlatformBand = {
@@ -94,6 +107,7 @@ export type CourseDefinition = Challenge & {
   palette: CoursePalette;
   payloads: readonly PayloadDefinition[];
   hazards: readonly HazardDefinition[];
+  foundations: readonly FoundationDefinition[];
   platformBands: readonly PlatformBand[];
 };
 
@@ -110,8 +124,13 @@ export const COURSE_DEFINITIONS = [
     length: 65,
     debrisSeed: 0,
     palette: { background: 0x12212b, fog: 0x12212b, floor: 0xcedbd5, dark: 0x273b45, signal: 0x96e9cd, hazard: 0xff806e, hemisphere: 0xd7f8ff, label: "#c5f8e9" },
-    payloads: [{ spawn: [0, 0.45, 19], dock: [0, 0.45, 25.7], label: "cargo drop" }],
-    hazards: [{ z: 42.5, y: 1.1, size: [0.62, 1.1, 7], speed: 1.8, amplitude: 3.6, phase: 0 }],
+    payloads: [{ spawn: [0, 0.45, 19], dock: [0, 0.45, 25.7], label: "cargo drop", settleRadius: 1.8, settleHeight: 0.5, approachRadius: 1.1, releaseRadius: 0.7 }],
+    hazards: [{ z: 42.5, y: 1.1, size: [0.62, 1.1, 7], speed: 1.8, amplitude: 3.6, phase: 0, hitHalfExtents: [0.78, 1.65] }],
+    foundations: [
+      { centerZ: 1, depth: 12, width: 9.2, centerY: -0.4 },
+      { centerZ: 21, depth: 12, width: 9.2, centerY: -0.4 },
+      { centerZ: 46, depth: 38, width: 9.2, centerY: -0.4 },
+    ],
     platformBands: [],
     stages: [
       { name: "First contact", hint: "Both hands: touch the amber relay and hold grip together", gate: 5, spawn: 0, kind: "relay" },
@@ -134,10 +153,16 @@ export const COURSE_DEFINITIONS = [
     length: 109,
     debrisSeed: 1.3,
     palette: { background: 0x071f2b, fog: 0x0c3543, floor: 0x6d91a1, dark: 0x163642, signal: 0x69d9ff, hazard: 0xffb45f, hemisphere: 0xc9f7ff, label: "#ccefff" },
-    payloads: [{ spawn: [0, 0.45, 25], dock: [0, 0.45, 76.2], label: "power cell dock" }],
+    payloads: [{ spawn: [0, 0.45, 25], dock: [0, 0.45, 76.2], label: "power cell dock", settleRadius: 1.15, settleHeight: 0.5, approachRadius: 1.1, releaseRadius: 0.7 }],
     hazards: [
-      { z: 41, y: 1.1, size: [0.65, 1.15, 4.2], speed: 1.45, amplitude: 3.6, phase: 0 },
-      { z: 58, y: 1.1, size: [0.65, 1.15, 3.2], speed: 1.9, amplitude: 3.15, phase: 1.3 },
+      { z: 41, y: 1.1, size: [0.65, 1.15, 4.2], speed: 1.45, amplitude: 3.6, phase: 0, hitHalfExtents: [0.78, 1.65] },
+      { z: 58, y: 1.1, size: [0.65, 1.15, 3.2], speed: 1.9, amplitude: 3.15, phase: 1.3, hitHalfExtents: [0.78, 1.65] },
+    ],
+    foundations: [
+      { centerZ: 13.5, depth: 37, width: 9.6, centerY: -0.42 },
+      { centerZ: 41.5, depth: 15, width: 4.3, centerY: -0.42 },
+      { centerZ: 72.5, depth: 13, width: 9.6, centerY: -0.42 },
+      { centerZ: 99, depth: 18, width: 9.6, centerY: -0.42 },
     ],
     platformBands: [{
       minZ: 80,
@@ -176,12 +201,20 @@ export const COURSE_DEFINITIONS = [
     debrisSeed: 2.5,
     palette: { background: 0x210f1b, fog: 0x321523, floor: 0x6e4754, dark: 0x2c1b2b, signal: 0xff9b73, hazard: 0xe84c72, hemisphere: 0xffc2b0, label: "#ffd3c0" },
     payloads: [
-      { spawn: [0, 0.65, 39], dock: [-1.55, 0.65, 70.5], label: "CORE A" },
-      { spawn: [0, 0.65, 76], dock: [1.55, 0.65, 92.2], label: "CORE B" },
+      { spawn: [0, 0.65, 39], dock: [-1.55, 0.65, 70.5], label: "CORE A", settleRadius: 0.82, settleHeight: 0.65, approachRadius: 1.1, releaseRadius: 0.7 },
+      { spawn: [0, 0.65, 76], dock: [1.55, 0.65, 92.2], label: "CORE B", settleRadius: 0.82, settleHeight: 0.65, approachRadius: 1.1, releaseRadius: 0.7 },
     ],
     hazards: [
-      { z: 29, y: 3.1, size: [0.7, 1.4, 3], speed: 1.7, amplitude: 3.8, phase: 0 },
-      { z: 54, y: 1.25, size: [0.7, 1.25, 3], speed: 2.15, amplitude: 3.2, phase: 1.3 },
+      { z: 29, y: 3.1, size: [0.7, 1.4, 3], speed: 1.7, amplitude: 3.8, phase: 0, hitHalfExtents: [0.78, 1.65] },
+      { z: 54, y: 1.25, size: [0.7, 1.25, 3], speed: 2.15, amplitude: 3.2, phase: 1.3, hitHalfExtents: [0.78, 1.65] },
+    ],
+    foundations: [
+      { centerZ: 2, depth: 14, width: 9.4, centerY: -0.4 },
+      { centerZ: 40.5, depth: 11, width: 9.4, centerY: -0.05 },
+      { centerZ: 68, depth: 11, width: 9.4, centerY: -0.4 },
+      { centerZ: 77, depth: 7, width: 9.4, centerY: -0.4 },
+      { centerZ: 89, depth: 13, width: 9.4, centerY: -0.4 },
+      { centerZ: 103, depth: 18, width: 9.4, centerY: -0.4 },
     ],
     platformBands: [
       { minZ: 21, maxZ: 35, halfWidth: 1.55, groundY: 1.92, speed: 0.75, amplitude: 1.35, phaseStep: 1.7, phaseStride: 4, renderY: 1.64, renderSize: [3.05, 0.55, 3.5], renderZ: [23, 27, 31.5] },
@@ -235,6 +268,10 @@ export function hazardX(challenge: number, index: number, ticks: number) {
 
 export function finalAlignment(ticks: number) {
   return Math.cos(ticks / SIMULATION_HZ * 1.35);
+}
+
+export function isFinalAligned(ticks: number) {
+  return Math.abs(finalAlignment(ticks)) > FINAL_ALIGNMENT_THRESHOLD;
 }
 
 export function groundAt(challenge: number, x: number, z: number, ticks = 0) {

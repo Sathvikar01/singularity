@@ -8,10 +8,10 @@ import {
   challengeFor,
   createBody,
   elapsedMs,
-  finalAlignment,
   formatTime,
   isChallenge,
   isCrewSize,
+  isFinalAligned,
   practiceInputs,
   rolesFor,
   securelyHeld,
@@ -557,7 +557,7 @@ function updateActionLabel() {
 function roleFeedback() {
   const stage = challengeFor(body.challenge).stages[body.stage];
   if (!stage) return "Course complete";
-  if (stage.kind === "finalTiming") return Math.abs(finalAlignment(body.ticks)) > 0.94 ? "ALIGN · every pilot ACT now" : "WAIT · watch the launch rings";
+  if (stage.kind === "finalTiming") return isFinalAligned(body.ticks) ? "ALIGN · every pilot ACT now" : "WAIT · watch the launch rings";
   if (body.crewSize === 3) {
     if (role === 0) return securelyHeld(body) ? "BOTH HANDS SECURE" : `LEFT ${body.handGrip[0] >= 0 ? "HELD" : "OPEN"} · RIGHT ${body.handGrip[1] >= 0 ? "HELD" : "OPEN"}`;
     if (role === 1) return body.bend ? "BENT LOW · keep moving" : body.brace ? "BRACED · absorbing movement" : "Hold ACT to brace or bend";
@@ -594,7 +594,7 @@ function frame(timestamp: number) {
     ($("objective-progress") as HTMLProgressElement).value = body.finished ? 1 : stageProgressValue(body);
     $("objective-panel").dataset.stage = String(body.stage);
     $("role-feedback").textContent = roleFeedback();
-    const aligned = stage?.kind === "finalTiming" && Math.abs(finalAlignment(body.ticks)) > 0.94;
+    const aligned = stage?.kind === "finalTiming" && isFinalAligned(body.ticks);
     $("sync-signal").textContent = stage?.kind === "finalTiming" ? aligned ? "ALIGN · ACT" : "WAIT FOR ALIGN" : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`;
     $("sync-signal").classList.toggle("aligned", Boolean(aligned));
     challenge.stages.forEach((_, index) => {

@@ -3,10 +3,13 @@ import test from "node:test";
 import {
   CHALLENGE,
   COURSE_DEFINITIONS,
+  FINAL_ALIGNMENT_THRESHOLD,
   SIMULATION_HZ,
   courseFor,
+  finalAlignment,
   groundAt,
   hazardX,
+  isFinalAligned,
   platformCenter,
 } from "../shared/course.ts";
 
@@ -60,6 +63,17 @@ test("course definitions own ordered payload, hazard, and platform truth", () =>
   ]);
   assert.deepEqual(COURSE_DEFINITIONS.map(course => course.hazards.map(hazard => hazard.z)), [[42.5], [41, 58], [29, 54]]);
   assert.deepEqual(COURSE_DEFINITIONS.map(course => course.platformBands.flatMap(band => band.renderZ)), [[], [82, 85.5, 89], [23, 27, 31.5, 48, 52.5, 57, 61]]);
+  for (const course of COURSE_DEFINITIONS) {
+    assert.ok(course.foundations.every(foundation => groundAt(course.id, 0, foundation.centerZ) > -20));
+    assert.ok(course.payloads.every(payload => payload.settleRadius > 0 && payload.approachRadius >= payload.releaseRadius));
+    assert.ok(course.hazards.every(hazard => hazard.hitHalfExtents.every(value => value > 0)));
+  }
+});
+
+test("one launch-window query serves simulation, rendering, and HUD callers", () => {
+  for (let ticks = 0; ticks < 300; ticks++) {
+    assert.equal(isFinalAligned(ticks), Math.abs(finalAlignment(ticks)) > FINAL_ALIGNMENT_THRESHOLD);
+  }
 });
 
 test("course motion queries preserve the deterministic ruleset", () => {

@@ -8,6 +8,7 @@ import {
   hazardX,
   isChallenge,
   isCrewSize,
+  isFinalAligned,
   platformCenter,
   type ChallengeId,
   type CrewSize,
@@ -26,6 +27,7 @@ export {
   hazardX,
   isChallenge,
   isCrewSize,
+  isFinalAligned,
   platformCenter,
 } from "./course.ts";
 export type { Challenge, ChallengeId, CourseDefinition, CrewSize, Stage, StageKind } from "./course.ts";
@@ -266,7 +268,7 @@ function applyHazards(body: Body) {
   for (const [index, hazard] of courseFor(body.challenge).hazards.entries()) {
     const { z } = hazard;
     const x = hazardX(body.challenge, index, body.ticks);
-    if (Math.abs(torso.z - z) > 1.65 || Math.abs(torso.x - x) > 0.78) continue;
+    if (Math.abs(torso.z - z) > hazard.hitHalfExtents[1] || Math.abs(torso.x - x) > hazard.hitHalfExtents[0]) continue;
     const direction = Math.sign(torso.x - x) || Math.sign(Math.cos(body.ticks * DT)) || 1;
     const force = body.brace ? 0.02 : 0.14;
     for (const point of body.nodes) { point.x += direction * force; point.py -= body.brace ? 0.002 : 0.016; }
@@ -287,9 +289,9 @@ function stageProgress(body: Body, crewInputs: Input[], controls: CanonicalInput
     case "relay": charging = relayReady(body, stage.gate, handActions); break;
     case "bridge": charging = nearGate && body.brace && Math.abs(torso.x) < 0.85; break;
     case "delivery": {
-      const objectIndex = activeObjectIndex(body), dock = courseFor(body.challenge).payloads[objectIndex].dock, object = body.objects[objectIndex];
+      const objectIndex = activeObjectIndex(body), payload = courseFor(body.challenge).payloads[objectIndex], dock = payload.dock, object = body.objects[objectIndex];
       const released = body.handGrip.every(grip => grip !== objectIndex);
-      charging = released && Math.hypot(object.x - dock[0], object.z - dock[2]) < (body.challenge === CHALLENGE.Easy ? 1.8 : 1.15) && object.y < dock[1] + 0.5;
+      charging = released && Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.settleRadius && object.y < dock[1] + payload.settleHeight;
       if (charging && body.charge + DT / chargeSeconds >= 1) body.placed[objectIndex] = true;
       break;
     }
@@ -314,15 +316,15 @@ function stageProgress(body: Body, crewInputs: Input[], controls: CanonicalInput
     case "unstableCarry": charging = nearGate && securelyHeld(body, 0) && body.brace; break;
     case "placeFirst":
     case "placeSecond": {
-      const objectIndex = stage.kind === "placeFirst" ? 0 : 1, dock = courseFor(body.challenge).payloads[objectIndex].dock, object = body.objects[objectIndex];
-      charging = body.handGrip.every(grip => grip !== objectIndex) && Math.hypot(object.x - dock[0], object.z - dock[2]) < 0.82 && Math.abs(object.y - dock[1]) < 0.65;
+      const objectIndex = stage.kind === "placeFirst" ? 0 : 1, payload = courseFor(body.challenge).payloads[objectIndex], dock = payload.dock, object = body.objects[objectIndex];
+      charging = body.handGrip.every(grip => grip !== objectIndex) && Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.settleRadius && Math.abs(object.y - dock[1]) < payload.settleHeight;
       chargeSeconds = 1.1;
       if (charging && body.charge + DT / chargeSeconds >= 1) body.placed[objectIndex] = true;
       break;
     }
     case "secondLift": charging = nearGate && securelyHeld(body, 1) && Math.abs(body.objects[1].x) < 0.88; break;
     case "finalTiming": {
-      const everybody = allPilotActions(body, crewInputs), aligned = Math.abs(finalAlignment(body.ticks)) > 0.94;
+      const everybody = allPilotActions(body, crewInputs), aligned = isFinalAligned(body.ticks);
       const previouslyTogether = body.previousActions.length === body.crewSize && body.previousActions.every(Boolean);
       if (!everybody || !aligned) body.syncStarted = false;
       if (nearGate && everybody && !previouslyTogether && !aligned && body.lockout <= 0) {
@@ -390,24 +392,24 @@ export function step(body: Body, raw: Input[]) {
 }
 
 function targetForStage(body: Body) {
-  const stage = challengeFor(body.challenge).stages[body.stage], objectIndex = activeObjectIndex(body), object = body.objects[objectIndex], dock = courseFor(body.challenge).payloads[objectIndex].dock;
+  const stage = challengeFor(body.challenge).stages[body.stage], objectIndex = activeObjectIndex(body), object = body.objects[objectIndex], payload = courseFor(body.challenge).payloads[objectIndex], dock = payload.dock;
   const placing = ["delivery", "placeFirst", "placeSecond"].includes(stage.kind);
-  const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < 1.1;
+  const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.approachRadius;
   const needsObject = ["lift", "precisionLift", "secondLift"].includes(stage.kind) || (placing && !objectAtDock && !securelyHeld(body, objectIndex));
   const targetZ = needsObject ? object.z : placing && securelyHeld(body, objectIndex) ? dock[2] : stage.gate;
   const targetX = placing && securelyHeld(body, objectIndex) ? dock[0] : platformCenter(body.challenge, body.nodes[0].z + 2.5, body.ticks);
-  return { stage, objectIndex, object, dock, targetX, targetZ };
+  return { stage, objectIndex, object, payload, dock, targetX, targetZ };
 }
 
 export function teammateInputs(body: Body): Input[] {
-  const { stage, objectIndex, object, dock, targetX, targetZ } = targetForStage(body), torso = body.nodes[0];
+  const { stage, objectIndex, object, payload, dock, targetX, targetZ } = targetForStage(body), torso = body.nodes[0];
   const nearGate = torso.z > stage.gate - 2.3, secure = securelyHeld(body, objectIndex);
-  const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < 1.1;
+  const objectAtDock = Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.approachRadius;
   const liftStage = ["lift", "precisionLift", "secondLift"].includes(stage.kind);
   const placing = ["delivery", "placeFirst", "placeSecond"].includes(stage.kind);
   const acquiring = !secure && (liftStage || (placing && !objectAtDock));
   const carrying = secure && (placing || liftStage || ["movingCarry", "narrowCarry", "unstableCarry"].includes(stage.kind));
-  const readyToRelease = placing && secure && Math.hypot(object.x - dock[0], object.z - dock[2]) < 0.7;
+  const readyToRelease = placing && secure && Math.hypot(object.x - dock[0], object.z - dock[2]) < payload.releaseRadius;
   const desiredZ = acquiring ? object.z - 0.25 : carrying && placing ? dock[2] - 0.65 : targetZ;
   const desiredX = acquiring ? object.x : carrying && placing ? dock[0] : targetX;
   const steer = clamp((desiredX - torso.x) * 1.25);

@@ -4,6 +4,7 @@ import {
   courseFor,
   finalAlignment,
   hazardX,
+  isFinalAligned,
   platformCenter,
   type ChallengeId,
   type CoursePalette,
@@ -142,9 +143,9 @@ export function createScene(container: HTMLElement) {
     const group = new THREE.Group();
     const floor = material(palette.floor), dark = material(palette.dark, 0.22, 0.48);
     const accent = material(palette.signal, 0.18, 0.4), hazard = material(palette.hazard, 0.08, 0.55);
-    for (const [z, depth] of [[1, 12], [21, 12], [46, 38]] as const) {
-      makeBox(group, 9.2, 0.7, depth, 0, -0.4, z, floor);
-      makeBox(group, 9.6, 0.2, depth + 0.3, 0, -0.85, z, dark);
+    for (const { centerZ: z, depth, width, centerY } of course.foundations) {
+      makeBox(group, width, 0.7, depth, 0, centerY, z, floor);
+      makeBox(group, width + 0.4, 0.2, depth + 0.3, 0, -0.85, z, dark);
       for (const x of [-4.4, 4.4]) makeBox(group, 0.09, 0.04, depth - 0.4, x, 0.015, z, accent);
     }
     makeBox(group, 2.6, 0.4, 8, 0, -0.2, 11, dark);
@@ -177,8 +178,8 @@ export function createScene(container: HTMLElement) {
     const group = new THREE.Group();
     const floor = material(palette.floor, 0.34, 0.5), dark = material(palette.dark, 0.5, 0.38);
     const accent = material(palette.signal, 0.3, 0.3), hazard = material(palette.hazard, 0.25, 0.4);
-    for (const [z, depth, width] of [[13.5, 37, 9.6], [41.5, 15, 4.3], [72.5, 13, 9.6], [99, 18, 9.6]] as const) {
-      makeBox(group, width, 0.68, depth, 0, -0.42, z, floor);
+    for (const { centerZ: z, depth, width, centerY } of course.foundations) {
+      makeBox(group, width, 0.68, depth, 0, centerY, z, floor);
       makeBox(group, width + 0.35, 0.18, depth + 0.2, 0, -0.85, z, dark);
     }
     for (let z = 50.7; z < 66; z += 1.7) {
@@ -218,9 +219,9 @@ export function createScene(container: HTMLElement) {
     const group = new THREE.Group();
     const floor = material(palette.floor, 0.42, 0.43), dark = material(palette.dark, 0.56, 0.34);
     const accent = material(palette.signal, 0.4, 0.3), hazard = material(palette.hazard, 0.3, 0.38);
-    for (const [z, depth, y] of [[2, 14, -0.4], [40.5, 11, -0.05], [68, 11, -0.4], [77, 7, -0.4], [89, 13, -0.4], [103, 18, -0.4]] as const) {
-      makeBox(group, 9.4, 0.7, depth, 0, y, z, floor);
-      makeBox(group, 9.7, 0.16, depth + 0.2, 0, y - 0.44, z, dark);
+    for (const { centerZ: z, depth, width, centerY } of course.foundations) {
+      makeBox(group, width, 0.7, depth, 0, centerY, z, floor);
+      makeBox(group, width + 0.3, 0.16, depth + 0.2, 0, centerY - 0.44, z, dark);
     }
     makeBox(group, 8.6, 5.7, 0.48, 0, 2.45, 8.4, dark);
     const relays = [-0.9, 0.9].map(x => {
@@ -328,7 +329,7 @@ export function createScene(container: HTMLElement) {
       course.finalRing.children.forEach((child, index) => {
         child.rotation.y = time * (index % 2 ? -1.1 : 0.8) + index;
         const ringMaterial = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        ringMaterial.emissiveIntensity = Math.abs(alignment) > 0.94 ? 2.2 : 0.45;
+        ringMaterial.emissiveIntensity = isFinalAligned(ticks) ? 2.2 : 0.45;
       });
       course.finalRing.scale.setScalar(1 + Math.max(0, Math.abs(alignment) - 0.8) * 0.25);
     }
