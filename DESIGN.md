@@ -188,7 +188,7 @@ At 700px and below, setup becomes a scrollable vertical composition: the checkli
 
 ## Elevation & Depth
 
-Depth is a hybrid led by the Three.js world. Perspective, fog, occlusion, cast shadows, lit course materials, and drifting debris establish physical space; the interface stays comparatively flat through translucent navy surfaces, 12–18px backdrop blur, and frosted hairlines. Shadows appear when a choice is selected, a status glows, or a dialog must separate decisively from play.
+Depth is a hybrid led by the Three.js world. Perspective, fog, occlusion, cast shadows, lit course materials, and drifting debris establish physical space; the interface stays comparatively flat through translucent navy surfaces, 12–18px backdrop blur, and frosted hairlines. The directional shadow volume follows the active body across long courses while its fixed sun direction prevents gait-induced swimming. Shadows appear when a choice is selected, a status glows, or a dialog must separate decisively from play.
 
 ### Shadow Vocabulary
 
@@ -258,7 +258,9 @@ The persistent header is a translucent 66px operating strip with the orbital mar
 
 ### Touch Controls
 
-Touch controls appear only during play on coarse pointers. Four 44px-minimum directional buttons use inline stroke icons, while the wider action control takes the current challenge signal and changes its verb—such as ACT, BRACE, BEND, or SYNC—to match the owned role and objective.
+Touch controls appear only during play on coarse pointers. Four 44px-minimum directional buttons use inline stroke icons, while the wider action control takes the current challenge signal and changes its verb—such as ACT, BRACE, BEND, or SYNC—to match the owned role and objective. The controls form one named accessibility group, preserve simultaneous pointer sources, map Enter or Space to the focused control, release safely on cancellation or focus loss, and accept assistive-technology click activation without leaking into the global ACT binding.
+
+The launch finale pairs its animated timing ring with explicit ALIGN, WAIT, RE-ARM, MISSED and LOCKED copy. An assertive atomic live region and a restrained one-shot audio cue announce only physics-eligible transitions; reduced-motion preference suppresses particles and camera trauma without removing state information.
 
 ## Do's and Don'ts
 

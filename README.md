@@ -37,11 +37,16 @@ Desktop keyboard and mobile touch controls are supported. Up to four colored tea
 
 ## Architecture
 
-- `shared/physics.ts`: deterministic 30 Hz simulation, 3/5-player limb mapping, target-velocity locomotion, dynamic support carrying, contact-edge impacts, dual-hand objects, penalties, checkpoints and practice teammates.
-- `spacetimedb/src/index.ts`: authoritative identity-based role assignments, bounded inputs, match lifecycle and ranked results.
-- `src/main.ts`: lobby, role-specific controls, objective progress, reconnects, practice and results.
-- `src/scene.ts`: three procedural Three.js environments, character bodies, objects, gates, moving hazards, unstable platforms, lighting and camera.
-- `src/game-feedback.ts`: presentation-only event tracking for pooled particles, procedural cues and smooth camera reactions.
+- `shared/course.ts`: canonical course geometry, support, hazard and launch-window queries shared by simulation and rendering.
+- `shared/physics.ts`: deterministic 30 Hz simulation, strict 3/5-player limb mapping, target-velocity locomotion, dynamic support carrying, contact-edge impacts, dual-hand objects, penalties, checkpoints and practice teammates.
+- `shared/match-lifecycle.ts`: pure readiness, reconnect grace, host election, countdown and abandonment policy.
+- `spacetimedb/src/index.ts`: authoritative identity-plus-connection leases, bounded inputs, fixed-step match lifecycle and categorized ranked results.
+- `src/race-session.ts` and `src/ranked-projection.ts`: client session state and validated projection of live server rows.
+- `src/network.ts` and `src/subscription-slot.ts`: identity bootstrap followed by serialized room and leaderboard subscription scopes.
+- `src/main.ts`: lobby, source-safe role controls, objective progress, reconnects, practice and results.
+- `src/character.ts` and `src/body-pose.ts`: articulated rig, two-bone limb posing and discontinuity-safe snapshot interpolation.
+- `src/scene.ts` and `src/lighting.ts`: three procedural Three.js environments, pooled effects, instanced debris, moving hazards/platforms, body-following shadows and camera.
+- `src/game-feedback.ts` and `src/finale-status.ts`: one-shot physical feedback plus canonical visual, audio and live-region launch cues.
 - `src/module_bindings/`: generated client protocol.
 
 Clients submit only x/z/action. The server derives the role from its player row, rejects stale protocols or mismatched room configurations, expires inputs after 500 ms, and records exact finish times using server timestamps plus simulation penalties. Room, team and result rows carry challenge and crew size; ruleset 4 records never mix with incompatible results.
@@ -71,7 +76,7 @@ Then, in a second terminal, build, generate bindings, publish the local database
 spacetime dev
 ```
 
-The local `.env.development` and tracked `spacetime.dev.json` keep Vite and the CLI on `http://127.0.0.1:3101/singularity-coordination-test-v4`. For one-shot setup, use `spacetime publish --env dev`, `spacetime generate --env dev`, then `npm run dev` instead. Run `node tests/browser.mjs` and `node tests/multiplayer.mjs`; the multiplayer suite covers both crew sizes and categorized results. Screenshots go to ignored `test-results/`. `tests/live-space.mjs` is a read-only production smoke/practice check; `TEST_URL` can point it at a local production preview.
+The local `.env.development` and tracked `spacetime.dev.json` keep Vite and the CLI on `http://127.0.0.1:3101/singularity-coordination-test-v4`. For one-shot setup, use `spacetime publish --env dev`, `spacetime generate --env dev`, then `npm run dev` instead. Run `node tests/browser.mjs`, `npm run test:perf`, and `node tests/multiplayer.mjs`; the multiplayer suite covers both crew sizes and categorized results. The performance harness prefers an installed Playwright Chromium and falls back to Chrome locally. Screenshots go to ignored `test-results/`. `tests/live-space.mjs` is a read-only production smoke/practice check; `TEST_URL` can point it at a local production preview.
 
 ## Release
 

@@ -44,7 +44,7 @@ The product name is Singularity. Its established voice is playful, concise, and 
 - Existing procedural Three.js environment and character rendering: `src/scene.ts` and `src/character.ts`.
 - Existing lobby, role controls, timer, challenge HUD, and leaderboard interface: `src/main.ts` and `src/style.css`.
 - Existing authoritative multiplayer and result persistence: `spacetimedb/src/index.ts`.
-- Existing unit, browser, and multiplayer verification: `tests/`.
+- Existing unit, browser, multiplayer, and measured performance verification: `tests/`.
 - No user accounts, testimonials, commercial claims, or external art assets are present and future work must not fabricate them.
 
 ## Product Principles
@@ -57,4 +57,4 @@ The product name is Singularity. Its established voice is playful, concise, and 
 
 ## Accessibility & Inclusion
 
-Critical state and role feedback must not rely on color alone. Controls must remain usable by keyboard and touch, interactive targets must be comfortably sized, and motion or effects must not obscure objectives.
+Critical state and role feedback must not rely on color alone. Controls must remain usable by keyboard, simultaneous touch/pointer input and assistive-technology activation; interactive targets must be comfortably sized and release safely when focus or visibility changes. Finale timing also has assertive non-color live feedback. Motion or effects must not obscure objectives, and reduced-motion preference must preserve meaningful state changes.
