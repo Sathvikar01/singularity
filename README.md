@@ -36,6 +36,10 @@ Generated SpacetimeDB bindings subscribe to public tables `room`, `player`, `tea
 
 This initial competitive course uses a custom constrained-body solver and procedural Three.js assets. Unreal/Blender are not runtime requirements. It does not include skeletal animation, voice chat, matchmaking, or player-account authentication. Public callsigns are self-selected.
 
+## Unreal and Blender handoff
+
+An optional Unreal Engine 5.4 shell is in [`unreal/Singularity.uproject`](unreal/Singularity.uproject). The Blender script [`art/blender/generate_singularity_assets.py`](art/blender/generate_singularity_assets.py) creates GLB body, course, cargo, and finish assets without external downloads. These assets are visual handoff material; SpacetimeDB remains the authoritative multiplayer simulation.
+
 ## Develop and verify
 
 Requires Node 22.6+ (24 recommended), npm, and SpacetimeDB CLI 2.9+.
