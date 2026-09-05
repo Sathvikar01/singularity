@@ -10,7 +10,6 @@ import {
   formatTime,
   isChallenge,
   isCrewSize,
-  isFinalAligned,
   rolesFor,
   securelyHeld,
   stageProgressValue,
@@ -19,6 +18,7 @@ import {
   type CrewSize,
   type Input,
 } from "../shared/physics";
+import { finaleAnnouncement, finaleCueState, finaleRoleCopy, finaleSignalCopy } from "./finale-status";
 import { createRaceSession, type RaceSessionSignal, type RaceSessionView } from "./race-session";
 import {
   DATABASE,
@@ -105,6 +105,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 </aside>
 <div class="objective-panel" id="objective-panel">
   <div class="objective-kicker"><span id="objective-difficulty"></span><i id="sync-signal"></i></div>
+  <span id="sync-announcement" class="sr-only" aria-live="assertive" aria-atomic="true"></span>
   <b id="objective-title"></b><span id="objective-hint"></span>
   <progress id="objective-progress" max="1" value="0" aria-label="Objective progress"></progress>
   <small id="role-feedback"></small>
@@ -248,6 +249,7 @@ window.addEventListener("keydown", unlockAudio, { once: true, capture: true });
 
 function playGameFeedback(event: GameFeedbackEvent) {
   switch (event.kind) {
+    case "align": beep(920, 0.12, 0.03, "sine", 1.12); break;
     case "step": beep(118, 0.055, 0.009 * event.strength, "triangle", 0.82); break;
     case "lift": beep(210, 0.11, 0.018, "triangle", 1.38); break;
     case "land": beep(92, 0.13, 0.025 * event.strength, "sine", 0.72); break;
@@ -775,11 +777,7 @@ function roleFeedback(view: RaceSessionView) {
   const stage = challengeFor(body.challenge).stages[body.stage];
   if (!stage) return "Course complete";
   if (stage.kind === "finalTiming") {
-    if (body.syncStarted) return "SYNC LOCKED · keep holding ACT";
-    if (body.lockout > 0) return "MISSED BEAT · every pilot release ACT";
-    return isFinalAligned(body.ticks)
-      ? "ALIGN · every pilot press ACT together"
-      : "WAIT · release ACT and watch the launch rings";
+    return finaleRoleCopy(finaleCueState(body));
   }
   if (body.crewSize === 3) {
     if (role === 0) return securelyHeld(body) ? "BOTH HANDS SECURE" : `LEFT ${body.handGrip[0] >= 0 ? "HELD" : "OPEN"} · RIGHT ${body.handGrip[1] >= 0 ? "HELD" : "OPEN"}`;
@@ -807,23 +805,18 @@ function frame(timestamp: number) {
     setProgress($("objective-progress"), body.finished ? 1 : stageProgressValue(body));
     setData($("objective-panel"), "stage", String(body.stage));
     setText($("role-feedback"), roleFeedback(view));
-    const finalTiming = stage?.kind === "finalTiming";
-    const aligned = finalTiming && isFinalAligned(body.ticks);
-    const syncText = body.syncStarted
-      ? "SYNC LOCKED · HOLD"
-      : body.lockout > 0
-        ? "MISSED BEAT · RELEASE"
-        : aligned
-          ? "ALIGN · ACT TOGETHER"
-          : "WAIT · RELEASE ACT";
-    setText($("sync-signal"), finalTiming ? syncText : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`);
-    $("sync-signal").classList.toggle("aligned", Boolean(aligned || (finalTiming && body.syncStarted)));
+    const finaleState = finaleCueState(body);
+    setText($("sync-signal"), finaleState === "inactive"
+      ? `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`
+      : finaleSignalCopy(finaleState));
+    $("sync-signal").classList.toggle("aligned", finaleState === "align" || finaleState === "locked");
+    setText($("sync-announcement"), finaleAnnouncement(finaleState));
     challenge.stages.forEach((_, index) => {
       $("stage-" + index).classList.toggle("current", body.stage === index);
       $("stage-" + index).classList.toggle("complete", body.stage > index);
     });
     updateActionLabel(view);
-  }
+  } else setText($("sync-announcement"), "");
   renderBodies.clear();
   for (const team of view.teams) renderBodies.set(team.number, team.body);
   const attemptId = view.room

@@ -274,6 +274,11 @@ export function isFinalAligned(ticks: number) {
   return Math.abs(finalAlignment(ticks)) > FINAL_ALIGNMENT_THRESHOLD;
 }
 
+/** Whether input submitted after this completed tick will land inside the launch window. */
+export function isNextFinalStepAligned(completedTicks: number) {
+  return isFinalAligned(completedTicks + 1);
+}
+
 export function groundAt(challenge: number, x: number, z: number, ticks = 0) {
   if (!isChallenge(challenge)) return -30;
   if (challenge === CHALLENGE.Easy) {

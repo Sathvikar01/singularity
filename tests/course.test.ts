@@ -10,6 +10,7 @@ import {
   groundAt,
   hazardX,
   isFinalAligned,
+  isNextFinalStepAligned,
   platformCenter,
 } from "../shared/course.ts";
 
@@ -74,7 +75,12 @@ test("one launch-window query serves simulation, rendering, and HUD callers", ()
   assert.equal(FINAL_ALIGNMENT_THRESHOLD, 0.9);
   for (let ticks = 0; ticks < 300; ticks++) {
     assert.equal(isFinalAligned(ticks), Math.abs(finalAlignment(ticks)) > FINAL_ALIGNMENT_THRESHOLD);
+    assert.equal(isNextFinalStepAligned(ticks), isFinalAligned(ticks + 1));
   }
+  assert.equal(isFinalAligned(59), false);
+  assert.equal(isNextFinalStepAligned(59), true, "input shown after tick 59 is judged on aligned tick 60");
+  assert.equal(isFinalAligned(79), true);
+  assert.equal(isNextFinalStepAligned(79), false, "input shown after tick 79 is judged on closed tick 80");
   let longestWindow = 0, currentWindow = 0;
   for (let ticks = 1; ticks < 600; ticks++) {
     currentWindow = isFinalAligned(ticks) ? currentWindow + 1 : 0;

@@ -102,6 +102,8 @@ try {
   await page.waitForTimeout(150);
   assert.match(await page.locator("#timer").textContent(), timerPattern);
   assert.match(await page.locator("#objective-title").textContent(), /^1 \/ 8/);
+  assert.equal(await page.locator("#sync-announcement").getAttribute("aria-live"), "assertive");
+  assert.equal(await page.locator("#sync-announcement").getAttribute("aria-atomic"), "true");
   await page.screenshot({ path: "test-results/challenge-medium-three-player.png" });
   await page.locator("#exit").click();
 

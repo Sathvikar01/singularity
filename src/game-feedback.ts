@@ -1,7 +1,8 @@
-import { groundAt } from "../shared/course.ts";
-import { DT, type Body } from "../shared/physics.ts";
+import { challengeFor, groundAt, isNextFinalStepAligned } from "../shared/course.ts";
+import { DT, isFinaleInputWindow, type Body } from "../shared/physics.ts";
 
 export type GameFeedbackKind =
+  | "align"
   | "step"
   | "lift"
   | "land"
@@ -31,6 +32,11 @@ function hazardMask(body: Body) {
   return mask;
 }
 
+function finaleWindowOpen(body: Body) {
+  return challengeFor(body.challenge).stages[body.stage]?.kind === "finalTiming" &&
+    isNextFinalStepAligned(body.ticks);
+}
+
 export class GameFeedbackTracker {
   private readonly emit: FeedbackEmitter;
   private initialized = false;
@@ -45,6 +51,7 @@ export class GameFeedbackTracker {
   private grips: [number, number] = [-1, -1];
   private airborne = false;
   private stepBeat = 0;
+  private finaleWindowAnnounced = false;
 
   constructor(emit: FeedbackEmitter) {
     this.emit = emit;
@@ -76,6 +83,13 @@ export class GameFeedbackTracker {
     if (body.mistakes > this.mistakes) this.emitAt("mistake", torso, 0.85);
     const activeHazards = hazardMask(body);
     if ((activeHazards & ~this.hazardMask) !== 0) this.emitAt("impact", torso, body.brace ? 0.45 : 1);
+    const windowOpen = finaleWindowOpen(body);
+    if (!windowOpen) this.finaleWindowAnnounced = false;
+    else if (body.syncStarted || body.lockout > 0) this.finaleWindowAnnounced = true;
+    if (isFinaleInputWindow(body) && !this.finaleWindowAnnounced) {
+      this.emitAt("align", torso, 0.55);
+      this.finaleWindowAnnounced = true;
+    }
 
     for (let side = 0; side < 2; side++) {
       if (this.grips[side] < 0 && body.handGrip[side] >= 0)
@@ -122,6 +136,8 @@ export class GameFeedbackTracker {
     if (resetMotion) {
       this.airborne = this.bodyIsAirborne(body);
       this.stepBeat = Math.floor(body.ticks / STEP_TICKS);
+      this.finaleWindowAnnounced = finaleWindowOpen(body) &&
+        (isFinaleInputWindow(body) || body.syncStarted || body.lockout > 0);
     }
   }
 

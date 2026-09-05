@@ -9,6 +9,7 @@ import {
   isChallenge,
   isCrewSize,
   isFinalAligned,
+  isNextFinalStepAligned,
   platformCenter,
   type ChallengeId,
   type CrewSize,
@@ -28,6 +29,7 @@ export {
   isChallenge,
   isCrewSize,
   isFinalAligned,
+  isNextFinalStepAligned,
   platformCenter,
 } from "./course.ts";
 export type { Challenge, ChallengeId, CourseDefinition, CrewSize, Stage, StageKind } from "./course.ts";
@@ -629,7 +631,7 @@ export function teammateInputs(body: Body): Input[] {
     }
     return { x, z, action };
   }) as [Input, Input];
-  const finalReady = stage.kind === "finalTiming" && nearGate && isFinalAligned(body.ticks + 1);
+  const finalReady = stage.kind === "finalTiming" && isAtFinaleGate(body) && isNextFinalStepAligned(body.ticks);
   if (stage.kind === "finalTiming") handInputs.forEach(input => { input.action = finalReady; });
   const legAction = ["switches", "balance", "climb", "unstable"].includes(stage.kind) || finalReady;
   const legs: [Input, Input] = [{ x: steer, z: forward, action: legAction }, { x: steer, z: forward, action: legAction }];
@@ -642,6 +644,32 @@ export function practiceInputs(body: Body, role: number, input: Input): Input[] 
   const result = teammateInputs(body);
   if (role >= 0 && role < result.length) result[role] = { ...input };
   return result;
+}
+
+/** Whether the body is inside the same spatial finale gate used by the simulation. */
+export function isAtFinaleGate(body: Body) {
+  const stage = challengeFor(body.challenge).stages[body.stage];
+  if (stage?.kind !== "finalTiming") return false;
+  const torso = body.nodes[0];
+  return torso.z > stage.gate - 2 &&
+    Math.abs(torso.x - platformCenter(body.challenge, torso.z, body.ticks)) < 2.2 &&
+    torso.y > -1;
+}
+
+export function finaleNeedsRelease(body: Body) {
+  const stage = challengeFor(body.challenge).stages[body.stage];
+  return stage?.kind === "finalTiming" &&
+    body.previousActions.length === body.crewSize &&
+    body.previousActions.every(Boolean);
+}
+
+/** Whether a fresh ACT edge submitted now can start the finale synchronization. */
+export function isFinaleInputWindow(body: Body) {
+  return isAtFinaleGate(body) &&
+    !body.syncStarted &&
+    body.lockout <= 0 &&
+    !finaleNeedsRelease(body) &&
+    isNextFinalStepAligned(body.ticks);
 }
 
 export function stageProgressValue(body: Body) {

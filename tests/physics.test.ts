@@ -16,7 +16,9 @@ import {
   hazardX,
   isChallenge,
   isCrewSize,
+  isFinaleInputWindow,
   isFinalAligned,
+  isNextFinalStepAligned,
   groundAt,
   neutralInputs,
   platformCenter,
@@ -529,11 +531,21 @@ for (const crewSize of CREW_SIZES) {
 
     const aligned = createBody(CHALLENGE.Difficult, crewSize);
     placeAtStageGate(aligned, finalStage);
-    assert.ok(isFinalAligned(aligned.ticks + 1));
+    assert.ok(isNextFinalStepAligned(aligned.ticks));
     step(aligned, neutralInputs(crewSize).map(input => ({ ...input, action: true })));
     assert.equal(aligned.mistakes, 0);
     assert.equal(aligned.penaltyMs, 0);
     assert.ok(aligned.charge > 0);
+
+    const expired = createBody(CHALLENGE.Difficult, crewSize);
+    placeAtStageGate(expired, finalStage);
+    expired.ticks = tickBeforeAlignmentEnds() + 1;
+    assert.equal(isFinalAligned(expired.ticks), true);
+    assert.equal(isFinaleInputWindow(expired), false, "the completed aligned tick must not advertise a closed next step");
+    step(expired, allAct);
+    assert.equal(expired.mistakes, 1);
+    assert.equal(expired.penaltyMs, challenge.timingPenaltyMs);
+    assert.equal(expired.syncStarted, false);
   });
 }
 
@@ -580,7 +592,7 @@ for (const crewSize of CREW_SIZES) {
     step(body, allAct);
     assert.equal(body.syncStarted, true);
     assert.ok(body.charge > 0);
-    assert.equal(isFinalAligned(body.ticks + 1), false, "test must arm on the final aligned tick");
+    assert.equal(isNextFinalStepAligned(body.ticks), false, "test must arm on the final aligned tick");
     for (let tick = 0; tick < 10 && !body.finished; tick++) step(body, allAct);
 
     assert.equal(body.finished, true);

@@ -5,6 +5,7 @@ import {
   finalAlignment,
   hazardX,
   isFinalAligned,
+  isNextFinalStepAligned,
   platformCenter,
   type ChallengeId,
   type CoursePalette,
@@ -351,6 +352,7 @@ export function createScene(container: HTMLElement) {
 
   function particleSettings(kind: GameFeedbackKind) {
     switch (kind) {
+      case "align": return [0, 0, 0] as const;
       case "step": return [3, 0.65, 0.34] as const;
       case "lift": return [6, 1.05, 0.46] as const;
       case "land": return [10, 1.4, 0.55] as const;
@@ -371,7 +373,7 @@ export function createScene(container: HTMLElement) {
   }
 
   function spawnFeedback(event: GameFeedbackEvent) {
-    if (reducedMotion) return;
+    if (reducedMotion || event.kind === "align") return;
     const settings = particleSettings(event.kind);
     let count: number = settings[0];
     const speed = settings[1], life = settings[2];
@@ -441,7 +443,8 @@ export function createScene(container: HTMLElement) {
       cameraTrauma = 0;
       return;
     }
-    const weight = event.kind === "impact" ? 0.48
+    const weight = event.kind === "align" ? 0
+      : event.kind === "impact" ? 0.48
       : event.kind === "fall" ? 0.72
         : event.kind === "mistake" ? 0.36
           : event.kind === "finish" ? 0.3
@@ -489,7 +492,9 @@ export function createScene(container: HTMLElement) {
     if (course.finalRing) {
       const alignment = finalAlignment(ticks);
       const stage = body ? courseFor(body.challenge).stages[body.stage] : undefined;
-      const alignedVisual = isFinalAligned(ticks) || (stage?.kind === "finalTiming" && body?.syncStarted);
+      const alignedVisual = stage?.kind === "finalTiming" && body
+        ? isNextFinalStepAligned(body.ticks) || body.syncStarted
+        : isFinalAligned(ticks);
       course.finalRing.rotation.z = time * 0.55;
       course.finalRing.children.forEach((child, index) => {
         child.rotation.y = time * (index % 2 ? -1.1 : 0.8) + index;
