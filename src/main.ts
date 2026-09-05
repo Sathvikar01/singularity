@@ -115,7 +115,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <div class="dock-heading"><b>CHOOSE THE PART YOU CONTROL</b><span>Solo Practice fills every other part with AI.</span></div>
   <div class="roles" id="role-cards"></div>
 </section>
-<div class="touch" aria-label="Touch controls">
+<div class="touch" role="group" aria-label="Touch controls">
   <button data-key="a" aria-label="Move left">${arrowIcon("left")}</button><button data-key="w" aria-label="Move forward">${arrowIcon("up")}</button>
   <button data-key="s" aria-label="Move backward">${arrowIcon("down")}</button><button data-key="d" aria-label="Move right">${arrowIcon("right")}</button>
   <button data-key=" " class="grab">ACT</button>
@@ -190,7 +190,17 @@ let nextVoice = 0;
 const audioVoices: Array<{ oscillator: OscillatorNode; gain: GainNode }> = [];
 const renderBodies = new Map<number, Body>();
 const keys = new Set<string>();
+const controlKeys = new Set<string>();
+const controlKeyboardActive = new Set<HTMLElement>();
+const controlResetters = new Set<() => void>();
 let toastTimer: ReturnType<typeof setTimeout>;
+
+function clearInputs() {
+  keys.clear();
+  controlKeys.clear();
+  controlKeyboardActive.clear();
+  controlResetters.forEach(reset => reset());
+}
 
 function toast(message: string) {
   $("toast").textContent = message;
@@ -270,7 +280,7 @@ const gameFeedback = new GameFeedbackTracker(event => {
 function modal(id: string) {
   const dialog = $(id);
   if (dialog instanceof HTMLDialogElement) dialog.showModal();
-  keys.clear();
+  clearInputs();
 }
 
 document.querySelectorAll<HTMLElement>("[data-close]").forEach(element => {
@@ -443,7 +453,7 @@ function handleSignals(signals: readonly RaceSessionSignal[]) {
 }
 
 function startPractice() {
-  keys.clear();
+  clearInputs();
   handleSignals(race.dispatch({ type: "start-practice" }));
 }
 
@@ -456,7 +466,7 @@ $("sound").onclick = () => {
 $("help").onclick = () => modal("help-dialog");
 $("exit").onclick = () => {
   handleSignals(race.dispatch({ type: "leave" }));
-  keys.clear(); document.body.classList.remove("playing");
+  clearInputs(); document.body.classList.remove("playing");
   scene.setFollow(false);
   $("countdown").textContent = ""; updateModeControls(); drawRoles();
 };
@@ -733,10 +743,11 @@ function refresh(areas: number = RefreshArea.All) {
 
 function input(): Input {
   if (document.querySelector("dialog[open]")) return { x: 0, z: 0, action: false };
+  const pressed = (key: string) => keys.has(key) || controlKeys.has(key);
   return {
-    x: (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0),
-    z: (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0),
-    action: keys.has(" "),
+    x: (pressed("d") || pressed("arrowright") ? 1 : 0) - (pressed("a") || pressed("arrowleft") ? 1 : 0),
+    z: (pressed("w") || pressed("arrowup") ? 1 : 0) - (pressed("s") || pressed("arrowdown") ? 1 : 0),
+    action: pressed(" "),
   };
 }
 
@@ -747,11 +758,73 @@ window.addEventListener("keydown", event => {
   keys.add(key);
 });
 window.addEventListener("keyup", event => keys.delete(event.key.toLowerCase()));
-window.addEventListener("blur", () => keys.clear());
-document.addEventListener("visibilitychange", () => keys.clear());
+window.addEventListener("blur", clearInputs);
+document.addEventListener("visibilitychange", clearInputs);
 document.querySelectorAll<HTMLElement>("[data-key]").forEach(element => {
-  element.onpointerdown = event => { element.setPointerCapture(event.pointerId); keys.add(element.dataset.key!); };
-  element.onpointerup = element.onpointercancel = () => keys.delete(element.dataset.key!);
+  const mappedKey = element.dataset.key!;
+  let pointerActive = false;
+  let keyboardActive = false;
+  let pulseActive = false;
+  let pulseTimer: ReturnType<typeof setTimeout> | undefined;
+  const sync = () => {
+    if (pointerActive || keyboardActive || pulseActive) controlKeys.add(mappedKey);
+    else controlKeys.delete(mappedKey);
+  };
+  const clearPulse = () => {
+    pulseActive = false;
+    clearTimeout(pulseTimer);
+  };
+  const reset = () => {
+    pointerActive = false;
+    keyboardActive = false;
+    clearPulse();
+    controlKeyboardActive.delete(element);
+    sync();
+  };
+  controlResetters.add(reset);
+  element.onpointerdown = event => {
+    clearPulse();
+    pointerActive = true;
+    element.setPointerCapture(event.pointerId);
+    sync();
+  };
+  element.onpointerup = element.onpointercancel = element.onlostpointercapture = () => {
+    pointerActive = false;
+    sync();
+  };
+  element.onkeydown = event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearPulse();
+    keyboardActive = true;
+    controlKeyboardActive.add(element);
+    sync();
+  };
+  element.onkeyup = event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardActive = false;
+    sync();
+    setTimeout(() => controlKeyboardActive.delete(element), 0);
+  };
+  element.onblur = () => {
+    keyboardActive = false;
+    clearPulse();
+    controlKeyboardActive.delete(element);
+    sync();
+  };
+  element.onclick = event => {
+    if (event.detail !== 0 || controlKeyboardActive.has(element)) return;
+    clearPulse();
+    pulseActive = true;
+    sync();
+    pulseTimer = setTimeout(() => {
+      pulseActive = false;
+      sync();
+    }, 160);
+  };
 });
 
 setInterval(() => {

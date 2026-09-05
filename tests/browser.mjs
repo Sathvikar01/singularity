@@ -177,6 +177,58 @@ try {
   assert.ok(touchLayout.every(box => box.width >= 44 && box.height >= 44), "coarse-pointer controls must meet the touch target floor");
   assert.ok(touchLayout.every((box, index) => index === 0 || touchLayout[index - 1].right <= box.left), "coarse-pointer controls must not overlap");
   assert.ok(touchLayout.every(box => box.top >= 0 && box.bottom <= 600), "coarse-pointer controls must remain inside the viewport");
+  assert.match(await touchTablet.locator(".touch").ariaSnapshot(), /group "Touch controls"/);
+
+  const actionControl = touchTablet.locator(".touch .grab");
+  const leftControl = touchTablet.locator('.touch [data-key="a"]');
+  const actionBox = await actionControl.boundingBox();
+  assert.ok(actionBox, "action control is not laid out");
+  await touchTablet.mouse.move(actionBox.x + actionBox.width / 2, actionBox.y + actionBox.height / 2);
+  await touchTablet.mouse.down();
+  try {
+    await touchTablet.waitForFunction(() => document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+    await leftControl.focus();
+    await touchTablet.waitForTimeout(80);
+    assert.equal((await touchTablet.locator("#role-feedback").textContent()).includes("BRACED"), true);
+  } finally {
+    await touchTablet.mouse.up();
+  }
+  await touchTablet.waitForFunction(() => !document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+
+  await actionControl.focus();
+  await touchTablet.keyboard.down("Enter");
+  try {
+    await touchTablet.waitForFunction(() => document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+  } finally {
+    await touchTablet.keyboard.up("Enter");
+  }
+  await touchTablet.waitForTimeout(100);
+  assert.equal((await touchTablet.locator("#role-feedback").textContent()).includes("BRACED"), false);
+
+  await actionControl.focus();
+  await touchTablet.keyboard.down("Enter");
+  try {
+    await touchTablet.waitForFunction(() => document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+    await leftControl.focus();
+    await touchTablet.waitForFunction(() => !document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+  } finally {
+    await touchTablet.keyboard.up("Enter");
+  }
+
+  await leftControl.focus();
+  await touchTablet.keyboard.down("Space");
+  try {
+    await touchTablet.waitForTimeout(80);
+    assert.equal((await touchTablet.locator("#role-feedback").textContent()).includes("BRACED"), false);
+  } finally {
+    await touchTablet.keyboard.up("Space");
+  }
+
+  await actionControl.evaluate(button => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
+  });
+  await touchTablet.waitForFunction(() => document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
+  await touchTablet.waitForFunction(() => !document.querySelector("#role-feedback")?.textContent?.includes("BRACED"));
 
   assert.deepEqual(errors, []);
   console.log(
