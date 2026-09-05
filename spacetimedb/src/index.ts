@@ -11,6 +11,13 @@ import {
   isCrewSize,
   rolesFor,
 } from "../../shared/physics";
+import {
+  assignmentConflict,
+  phasePolicy,
+  planMatchStart,
+  type MatchAssignment,
+  type MatchMember,
+} from "../../shared/match-lifecycle";
 const room = table(
   { public: true },
   {
@@ -74,6 +81,19 @@ const db = schema({ room, player, team, result, tick });
 export default db;
 const now = (ctx: { timestamp: { microsSinceUnixEpoch: bigint } }) =>
   ctx.timestamp.microsSinceUnixEpoch;
+const lifecycleMember = (p: {
+  id: { toHexString(): string };
+  team: number;
+  role: number;
+  online: boolean;
+  seen: bigint;
+}): MatchMember => ({
+  id: p.id.toHexString(),
+  team: p.team,
+  role: p.role,
+  online: p.online,
+  disconnectedAtMicros: p.online ? 0n : p.seen,
+});
 export const init = db.init((ctx) => {
   ctx.db.tick.insert({ id: 0n, scheduledAt: ScheduleAt.interval(33333n) });
 });
@@ -105,18 +125,37 @@ export const join = db.reducer(
       );
     const previous = ctx.db.player.id.find(ctx.sender);
     const priorRoom = previous && ctx.db.room.id.find(previous.room);
-    const locked = (state?: string) => state === "countdown" || state === "racing";
-    if (previous && locked(priorRoom?.state) &&
-      (previous.room !== code ||
-        previous.team !== a.teamNumber ||
-        previous.role !== a.role ||
-        priorRoom!.ruleset !== a.ruleset ||
-        priorRoom!.challenge !== a.challenge ||
-        priorRoom!.crewSize !== a.crewSize))
+    const request: MatchAssignment = {
+      room: code,
+      team: a.teamNumber,
+      role: a.role,
+      ruleset: a.ruleset,
+      challenge: a.challenge,
+      crewSize: a.crewSize,
+    };
+    const current = previous && priorRoom ? {
+      room: previous.room,
+      team: previous.team,
+      role: previous.role,
+      ruleset: priorRoom.ruleset,
+      challenge: priorRoom.challenge,
+      crewSize: priorRoom.crewSize,
+    } : undefined;
+    let r = ctx.db.room.id.find(code);
+    const conflict = assignmentConflict({
+      current,
+      currentRoomPhase: priorRoom?.state,
+      request,
+      targetRoomPhase: r?.state,
+    });
+    if (conflict === "current-match-locked")
       throw new SenderError(
         "Your room, challenge, crew size, team, and role are locked until this race ends.",
       );
-    let r = ctx.db.room.id.find(code);
+    if (conflict === "target-match-locked")
+      throw new SenderError(
+        "This race is locked. Only its assigned pilots can reconnect.",
+      );
     if (!r) {
       if ([...ctx.db.room.iter()].length >= 200)
         throw new SenderError("Lobby capacity reached.");
@@ -139,28 +178,25 @@ export const join = db.reducer(
       throw new SenderError(
         "This room is configured for a different challenge or crew size.",
       );
-    if (
-      locked(r.state) &&
-      (!previous || previous.room !== code || previous.team !== a.teamNumber || previous.role !== a.role)
-    )
-      throw new SenderError(
-        "This race is locked. Only its assigned pilots can reconnect.",
-      );
     for (const p of ctx.db.player.iter())
       if (
         p.room === code &&
         p.team === a.teamNumber &&
         p.role === a.role &&
         !p.id.isEqual(ctx.sender)
-      )
-        throw new SenderError("That body part already has a pilot.");
+      ) {
+        if (!phasePolicy(r.state).assignmentLocked && !p.online)
+          ctx.db.player.id.delete(p.id);
+        else
+          throw new SenderError("That body part already has a pilot.");
+      }
     ctx.db.player.id.delete(ctx.sender);
     ctx.db.player.insert({
       id: ctx.sender,
       room: code,
       team: a.teamNumber,
       role: a.role,
-      name: locked(r.state) ? previous!.name : a.name.trim().slice(0, 20),
+      name: phasePolicy(r.state).assignmentLocked ? previous!.name : a.name.trim().slice(0, 20),
       x: 0,
       z: 0,
       action: false,
@@ -185,7 +221,7 @@ export const input = db.reducer(
   (ctx, a) => {
     const p = ctx.db.player.id.find(ctx.sender);
     if (!p || !p.online) return;
-    if (ctx.db.room.id.find(p.room)?.state !== "racing") return;
+    if (!phasePolicy(ctx.db.room.id.find(p.room)?.state).acceptsInput) return;
     if (!Number.isFinite(a.x) || !Number.isFinite(a.z))
       throw new SenderError("Invalid input");
     if (now(ctx) - p.seen < 25000n) return;
@@ -200,41 +236,51 @@ export const input = db.reducer(
 );
 export const start = db.reducer((ctx) => {
   const p = ctx.db.player.id.find(ctx.sender);
-  if (!p) throw new SenderError("Join first");
-  const r = ctx.db.room.id.find(p.room)!;
+  if (!p || !p.online) throw new SenderError("Join first");
+  const r = ctx.db.room.id.find(p.room);
+  if (!r) throw new SenderError("Join first");
   if (!r.host.isEqual(ctx.sender))
     throw new SenderError("Only the room host can start a race");
-  if (r.state !== "lobby" && r.state !== "finished")
-    throw new SenderError("Race already running");
   const members = [...ctx.db.player.iter()].filter(q => q.room === r.id);
-  const activeTeams = new Set(members.filter(q => q.online).map(q => q.team));
+  const plan = planMatchStart({
+    phase: r.state,
+    crewSize: r.crewSize,
+    nowMicros: now(ctx),
+    members: members.map(lifecycleMember),
+  });
+  if (!plan.ok && plan.reason === "invalid-phase")
+    throw new SenderError("Race already running");
   if (!isChallenge(r.challenge) || !isCrewSize(r.crewSize) || r.ruleset !== RULESET)
     throw new SenderError("This room has an incompatible course configuration.");
-  const requiredRoles = rolesFor(r.crewSize);
-  for (const number of activeTeams) {
-    if (!requiredRoles.every((_, role) =>
-      members.some(q => q.team === number && q.role === role && q.online)))
+  if (!plan.ok) {
+    if (plan.reason === "incomplete-team")
       throw new SenderError(
-        `Team ${number + 1} needs all ${r.crewSize} connected roles before starting.`,
+        `Team ${plan.team! + 1} needs all ${r.crewSize} connected roles before starting.`,
       );
+    if (plan.reason === "no-active-team")
+      throw new SenderError("At least one complete connected team is required.");
+    throw new SenderError("This room has an incompatible course configuration.");
   }
+  const activeTeams = new Set(plan.activeTeams);
   for (const q of members) {
     if (!activeTeams.has(q.team)) ctx.db.player.id.delete(q.id);
     else ctx.db.player.id.update({ ...q, x: 0, z: 0, action: false, seen: 0n });
   }
-  for (const tm of ctx.db.team.iter())
-    if (tm.room === r.id)
-      ctx.db.team.id.update({
+  for (const tm of ctx.db.team.iter()) {
+    if (tm.room !== r.id) continue;
+    if (!activeTeams.has(tm.number)) ctx.db.team.id.delete(tm.id);
+    else ctx.db.team.id.update({
         ...tm,
         body: encodeSnapshot(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
         challenge: r.challenge,
         crewSize: r.crewSize,
-      });
+    });
+  }
   ctx.db.room.id.update({
     ...r,
     state: "countdown",
-    startAt: now(ctx) + 3000000n,
+    startAt: plan.startAtMicros,
   });
 });
 // A disconnected pilot retains the same match lease. Leaving cannot bypass the lock.
@@ -242,8 +288,15 @@ const releasePlayer = (ctx: any) => {
   const p = ctx.db.player.id.find(ctx.sender);
   if (!p) return;
   const r = ctx.db.room.id.find(p.room);
-  if (r && (r.state === "countdown" || r.state === "racing"))
-    ctx.db.player.id.update({ ...p, online: false, x: 0, z: 0, action: false, seen: 0n });
+  if (phasePolicy(r?.state).reserveAssignmentOnRelease)
+    ctx.db.player.id.update({
+      ...p,
+      online: false,
+      x: 0,
+      z: 0,
+      action: false,
+      seen: p.online ? now(ctx) : p.seen,
+    });
   else ctx.db.player.id.delete(ctx.sender);
 };
 export const leave = db.reducer(releasePlayer);
