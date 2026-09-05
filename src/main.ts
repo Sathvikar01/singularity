@@ -24,6 +24,15 @@ import { connect, readRankedProjection } from "./network";
 import type { DbConnection } from "./module_bindings";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const setText = (element: HTMLElement, value: string) => {
+  if (element.textContent !== value) element.textContent = value;
+};
+const setProgress = (element: HTMLProgressElement, value: number) => {
+  if (element.value !== value) element.value = value;
+};
+const setData = (element: HTMLElement, key: string, value: string) => {
+  if (element.dataset[key] !== value) element.dataset[key] = value;
+};
 const challengeButtons = (context: string) => CHALLENGES.map(challenge => `
   <button class="challenge-choice" data-${context}-challenge="${challenge.id}" aria-pressed="${challenge.id === 0}">
     <span class="difficulty">${challenge.difficulty}</span>
@@ -629,9 +638,12 @@ function updateActionLabel(view = race.view(Date.now())) {
   if (!button) return;
   const { body, controlledRole: role } = view;
   const stage = challengeFor(body.challenge).stages[body.stage];
-  if (stage?.kind === "finalTiming") button.textContent = "SYNC";
-  else if (stage?.kind === "duck" && (view.setup.crewSize === 3 ? role === 1 : role === 2)) button.textContent = "BEND";
-  else button.textContent = rolesFor(view.setup.crewSize)[role]?.action ?? "ACT";
+  const label = stage?.kind === "finalTiming"
+    ? "SYNC"
+    : stage?.kind === "duck" && (view.setup.crewSize === 3 ? role === 1 : role === 2)
+      ? "BEND"
+      : rolesFor(view.setup.crewSize)[role]?.action ?? "ACT";
+  setText(button, label);
 }
 
 function roleFeedback(view: RaceSessionView) {
@@ -664,13 +676,13 @@ function frame(timestamp: number) {
   const { body } = view;
   if (view.playing) {
     const challenge = challengeFor(body.challenge), stage = challenge.stages[body.stage];
-    $("countdown").textContent = view.countdownSeconds > 0 ? String(view.countdownSeconds) : "";
-    $("timer").textContent = formatTime(view.elapsedMs);
-    $("objective-title").textContent = body.finished ? "MISSION COMPLETE" : `${body.stage + 1} / ${challenge.stages.length} · ${stage.name}`;
-    $("objective-hint").textContent = stage?.hint ?? "Your crew made it home.";
-    ($("objective-progress") as HTMLProgressElement).value = body.finished ? 1 : stageProgressValue(body);
-    $("objective-panel").dataset.stage = String(body.stage);
-    $("role-feedback").textContent = roleFeedback(view);
+    setText($("countdown"), view.countdownSeconds > 0 ? String(view.countdownSeconds) : "");
+    setText($("timer"), formatTime(view.elapsedMs));
+    setText($("objective-title"), body.finished ? "MISSION COMPLETE" : `${body.stage + 1} / ${challenge.stages.length} · ${stage.name}`);
+    setText($("objective-hint"), stage?.hint ?? "Your crew made it home.");
+    setProgress($("objective-progress"), body.finished ? 1 : stageProgressValue(body));
+    setData($("objective-panel"), "stage", String(body.stage));
+    setText($("role-feedback"), roleFeedback(view));
     const finalTiming = stage?.kind === "finalTiming";
     const aligned = finalTiming && isFinalAligned(body.ticks);
     const syncText = body.syncStarted
@@ -680,7 +692,7 @@ function frame(timestamp: number) {
         : aligned
           ? "ALIGN · ACT TOGETHER"
           : "WAIT · RELEASE ACT";
-    $("sync-signal").textContent = finalTiming ? syncText : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`;
+    setText($("sync-signal"), finalTiming ? syncText : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`);
     $("sync-signal").classList.toggle("aligned", Boolean(aligned || (finalTiming && body.syncStarted)));
     challenge.stages.forEach((_, index) => {
       $("stage-" + index).classList.toggle("current", body.stage === index);
