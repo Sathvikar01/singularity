@@ -86,6 +86,72 @@ export type Body = {
   syncStarted: boolean;
 };
 
+export type SnapshotExpectation = {
+  version?: number;
+  challenge?: number;
+  crewSize?: number;
+};
+
+export type SnapshotDecodeResult =
+  | { ok: true; body: Body }
+  | { ok: false; error: string };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  Number.isInteger(value) && Number(value) >= 0;
+
+function snapshotError(value: unknown, expected: SnapshotExpectation): string | undefined {
+  if (!isRecord(value)) return "Snapshot must be an object.";
+  const challenge = value.challenge;
+  const crewSize = value.crewSize;
+  if (value.version !== RULESET) return "Snapshot ruleset is incompatible.";
+  if (!isFiniteNumber(challenge) || !isChallenge(challenge)) return "Snapshot challenge is invalid.";
+  if (!isFiniteNumber(crewSize) || !isCrewSize(crewSize)) return "Snapshot crew size is invalid.";
+  if (expected.version !== undefined && value.version !== expected.version) return "Snapshot does not match the room ruleset.";
+  if (expected.challenge !== undefined && challenge !== expected.challenge) return "Snapshot does not match the room challenge.";
+  if (expected.crewSize !== undefined && crewSize !== expected.crewSize) return "Snapshot does not match the room crew size.";
+
+  const course = courseFor(challenge);
+  if (!Array.isArray(value.nodes) || value.nodes.length !== 6) return "Snapshot body nodes are invalid.";
+  if (!Array.isArray(value.objects) || value.objects.length !== course.payloads.length) return "Snapshot payload nodes are invalid.";
+  for (const point of [...value.nodes, ...value.objects]) {
+    if (!isRecord(point) || ![point.x, point.y, point.z, point.px, point.py, point.pz].every(isFiniteNumber)) return "Snapshot contains a non-finite node.";
+  }
+  if (!Array.isArray(value.placed) || value.placed.length !== course.payloads.length || !value.placed.every(item => typeof item === "boolean")) return "Snapshot payload placement is invalid.";
+  if (!Array.isArray(value.handGrip) || value.handGrip.length !== 2 || !value.handGrip.every(item => Number.isInteger(item) && Number(item) >= -1 && Number(item) < course.payloads.length)) return "Snapshot hand grip state is invalid.";
+  if (!Array.isArray(value.feet) || value.feet.length !== 2 || !value.feet.every(item => isFiniteNumber(item) && item >= 0 && item <= 1)) return "Snapshot foot state is invalid.";
+  if (!Array.isArray(value.previousActions) || value.previousActions.length !== crewSize || !value.previousActions.every(item => typeof item === "boolean")) return "Snapshot action history is invalid.";
+
+  if (!isNonNegativeInteger(value.stage) || value.stage > course.stages.length) return "Snapshot stage is invalid.";
+  if (!isNonNegativeInteger(value.falls) || !isNonNegativeInteger(value.mistakes) || !isNonNegativeInteger(value.penaltyMs) || !isNonNegativeInteger(value.ticks) || !isNonNegativeInteger(value.lockout)) return "Snapshot counters are invalid.";
+  if (!isFiniteNumber(value.look) || !isFiniteNumber(value.charge) || value.charge < 0 || value.charge > 1) return "Snapshot pose state is invalid.";
+  if (![value.finished, value.brace, value.bend, value.syncStarted].every(item => typeof item === "boolean")) return "Snapshot flags are invalid.";
+  if (value.finished !== (value.stage === course.stages.length)) return "Snapshot completion state is inconsistent.";
+  return undefined;
+}
+
+export function decodeSnapshot(serialized: string, expected: SnapshotExpectation = {}): SnapshotDecodeResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    return { ok: false, error: "Snapshot is not valid JSON." };
+  }
+  const error = snapshotError(value, expected);
+  return error ? { ok: false, error } : { ok: true, body: value as Body };
+}
+
+export function encodeSnapshot(body: Body): string {
+  const error = snapshotError(body, {});
+  if (error) throw new Error(`Cannot encode invalid snapshot: ${error}`);
+  return JSON.stringify(body);
+}
+
 type CanonicalInputs = {
   hands: [Input, Input];
   torso: Input;

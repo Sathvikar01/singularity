@@ -7,6 +7,7 @@ import {
   RULESET,
   challengeFor,
   createBody,
+  decodeSnapshot,
   elapsedMs,
   formatTime,
   isChallenge,
@@ -490,12 +491,17 @@ function refresh() {
       if (!playing || matchKey !== nextMatch) { matchKey = nextMatch; enter(); ($("finish-dialog") as HTMLDialogElement).close(); }
       $("mode-label").textContent = `${challengeFor(selectedChallenge).difficulty.toUpperCase()} · TEAM ${myTeam + 1} / ROOM ${roomCode}`;
       $("race-status").textContent = room.state.toUpperCase();
-      bodies.clear();
-      for (const team of conn.db.team.iter()) if (team.room === roomCode && members.some(player => player.team === team.number)) bodies.set(team.number, JSON.parse(team.body));
-      body = bodies.get(myTeam) || body;
       const teams = [...conn.db.team.iter()].filter(team => team.room === roomCode && members.some(player => player.team === team.number)).sort((a, b) => (a.finishMs || Infinity) - (b.finishMs || Infinity));
-      $("standings").replaceChildren(...teams.map(team => {
-        const element = document.createElement("div"), teamBody = JSON.parse(team.body) as Body;
+      bodies.clear();
+      const decodedTeams = teams.flatMap(team => {
+        const snapshot = decodeSnapshot(team.body, { version: room.ruleset, challenge: room.challenge, crewSize: room.crewSize });
+        if (!snapshot.ok) return [];
+        bodies.set(team.number, snapshot.body);
+        return [{ team, body: snapshot.body }];
+      });
+      body = bodies.get(myTeam) || body;
+      $("standings").replaceChildren(...decodedTeams.map(({ team, body: teamBody }) => {
+        const element = document.createElement("div");
         element.textContent = `TEAM ${team.number + 1} · ${team.finishMs ? formatTime(team.finishMs) : `${teamBody.stage}/${challengeFor(teamBody.challenge).stages.length} objectives`}`;
         return element;
       }));

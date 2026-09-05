@@ -2,13 +2,14 @@ import { schema, table, t, SenderError } from "spacetimedb/server";
 import { ScheduleAt } from "spacetimedb";
 import {
   createBody,
+  decodeSnapshot,
+  encodeSnapshot,
   step,
   neutralInputs,
   RULESET,
   isChallenge,
   isCrewSize,
   rolesFor,
-  type Body,
 } from "../../shared/physics";
 const room = table(
   { public: true },
@@ -172,7 +173,7 @@ export const join = db.reducer(
         id,
         room: code,
         number: a.teamNumber,
-        body: JSON.stringify(createBody(r.challenge, r.crewSize)),
+        body: encodeSnapshot(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
         challenge: r.challenge,
         crewSize: r.crewSize,
@@ -225,7 +226,7 @@ export const start = db.reducer((ctx) => {
     if (tm.room === r.id)
       ctx.db.team.id.update({
         ...tm,
-        body: JSON.stringify(createBody(r.challenge, r.crewSize)),
+        body: encodeSnapshot(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
         challenge: r.challenge,
         crewSize: r.crewSize,
@@ -287,17 +288,12 @@ export const simulate = db.reducer(
           finished++;
           continue;
         }
-        const b = JSON.parse(tm.body) as Body;
-        if (
-          b.version !== r.ruleset ||
-          b.challenge !== r.challenge ||
-          b.crewSize !== r.crewSize ||
-          tm.challenge !== r.challenge ||
-          tm.crewSize !== r.crewSize
-        ) {
+        const snapshot = decodeSnapshot(tm.body, { version: r.ruleset, challenge: r.challenge, crewSize: r.crewSize });
+        if (!snapshot.ok || tm.challenge !== r.challenge || tm.crewSize !== r.crewSize) {
           ctx.db.room.id.update({ ...r, state: "finished" });
           continue;
         }
+        const b = snapshot.body;
         const inputs = neutralInputs(r.crewSize);
         for (const p of members)
           if (p.online && p.team === tm.number && p.role < roomRoles.length && time - p.seen < 500000n)
@@ -309,7 +305,7 @@ export const simulate = db.reducer(
           : 0;
         ctx.db.team.id.update({
           ...tm,
-          body: JSON.stringify(b),
+          body: encodeSnapshot(b),
           finishMs,
           challenge: r.challenge,
           crewSize: r.crewSize,
