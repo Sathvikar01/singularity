@@ -8,10 +8,12 @@ import {
   LINKS,
   RULESET,
   challengeFor,
+  courseFor,
   createBody,
   elapsedMs,
   finalAlignment,
   formatTime,
+  hazardX,
   isChallenge,
   isCrewSize,
   isFinalAligned,
@@ -35,6 +37,10 @@ function planarSpeed(point: ReturnType<typeof createBody>["nodes"][number]) {
 
 function verticalSpeed(point: ReturnType<typeof createBody>["nodes"][number]) {
   return (point.y - point.py) / DT;
+}
+
+function lateralSpeed(point: ReturnType<typeof createBody>["nodes"][number]) {
+  return (point.x - point.px) / DT;
 }
 
 function assertFiniteAndJointBounded(body: ReturnType<typeof createBody>) {
@@ -329,6 +335,60 @@ test("a stationary torso brace dissipates drift without self-propulsion", () => 
   const stationary = createBody(CHALLENGE.Easy, 5);
   for (let tick = 0; tick < 60; tick++) step(stationary, braceInput);
   assert.ok(Math.hypot(stationary.nodes[0].x, stationary.nodes[0].z) < 0.05);
+});
+
+test("hazards deliver one contact impulse and a torso brace softens it", () => {
+  const hazardZ = courseFor(CHALLENGE.Easy).hazards[0].z;
+  const makeBody = () => {
+    const body = createBody(CHALLENGE.Easy, 5, hazardZ);
+    body.stage = 4;
+    body.handGrip = [0, 0];
+    return body;
+  };
+  const impact = makeBody();
+  const suppressedImpact = makeBody();
+  suppressedImpact.hazardContacts[0] = true;
+  const bracedImpact = makeBody();
+  const suppressedBrace = makeBody();
+  suppressedBrace.hazardContacts[0] = true;
+  const handsHeld = neutralInputs(5);
+  handsHeld[0].action = true;
+  handsHeld[1].action = true;
+  const handsHeldAndBraced = handsHeld.map(input => ({ ...input }));
+  handsHeldAndBraced[2].action = true;
+
+  step(impact, handsHeld);
+  step(suppressedImpact, handsHeld);
+  step(bracedImpact, handsHeldAndBraced);
+  step(suppressedBrace, handsHeldAndBraced);
+
+  const fullImpulse = Math.abs(lateralSpeed(impact.nodes[0]) - lateralSpeed(suppressedImpact.nodes[0]));
+  const bracedImpulse = Math.abs(lateralSpeed(bracedImpact.nodes[0]) - lateralSpeed(suppressedBrace.nodes[0]));
+  assert.ok(fullImpulse > 3.2 && fullImpulse < 3.6);
+  assert.ok(bracedImpulse < fullImpulse * 0.5);
+  assert.deepEqual(impact.handGrip, [-1, -1]);
+  assert.deepEqual(bracedImpact.handGrip, [0, 0]);
+  assert.equal(impact.hazardContacts[0], true);
+
+  const velocityAfterEntry = lateralSpeed(impact.nodes[0]);
+  step(impact, handsHeld);
+  assert.ok(Math.abs(lateralSpeed(impact.nodes[0])) < Math.abs(velocityAfterEntry), "overlap must not stack another impulse");
+
+  for (const point of impact.nodes) {
+    point.x += 10;
+    point.px = point.x;
+  }
+  step(impact, handsHeld);
+  assert.equal(impact.hazardContacts[0], false);
+  const hazardXAtReentry = hazardX(CHALLENGE.Easy, 0, impact.ticks + 1);
+  const dx = hazardXAtReentry - impact.nodes[0].x;
+  for (const point of impact.nodes) {
+    point.x += dx;
+    point.px = point.x;
+  }
+  step(impact, handsHeld);
+  assert.equal(impact.hazardContacts[0], true);
+  assert.ok(Math.abs(lateralSpeed(impact.nodes[0])) > 3.2, "leaving and re-entering must arm a new impact");
 });
 
 test("Torso maps to slot 2 in 3p and slot 3 in 5p display order", () => {

@@ -12,6 +12,7 @@ test("body snapshots round-trip through the versioned codec", () => {
   const body = createBody(CHALLENGE.Difficult, 5);
   body.ticks = 42;
   body.nodes[0].x = 0.25;
+  body.hazardContacts[0] = true;
   const encoded = encodeSnapshot(body);
   const decoded = decodeSnapshot(encoded, { version: RULESET, challenge: CHALLENGE.Difficult, crewSize: 5 });
   assert.equal(decoded.ok, true);

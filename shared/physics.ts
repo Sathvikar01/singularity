@@ -428,10 +428,19 @@ function applyHazards(body: Body) {
   for (const [index, hazard] of courseFor(body.challenge).hazards.entries()) {
     const { z } = hazard;
     const x = hazardX(body.challenge, index, body.ticks);
-    if (Math.abs(torso.z - z) > hazard.hitHalfExtents[1] || Math.abs(torso.x - x) > hazard.hitHalfExtents[0]) continue;
+    const overlapping = Math.abs(torso.z - z) <= hazard.hitHalfExtents[1] &&
+      Math.abs(torso.x - x) <= hazard.hitHalfExtents[0];
+    if (!overlapping) {
+      body.hazardContacts[index] = false;
+      continue;
+    }
+    if (body.hazardContacts[index]) continue;
+    body.hazardContacts[index] = true;
     const direction = Math.sign(torso.x - x) || Math.sign(Math.cos(body.ticks * DT)) || 1;
-    const force = body.brace ? 0.02 : 0.14;
-    for (const point of body.nodes) { point.x += direction * force; point.py -= body.brace ? 0.002 : 0.016; }
+    const lateralVelocity = body.brace ? 1.15 : 3.4;
+    const liftVelocity = body.brace ? 0.35 : 1.15;
+    for (const point of body.nodes)
+      addVelocityImpulse(point, direction * lateralVelocity, liftVelocity, 0);
     if (!body.brace && body.handGrip.some(grip => grip >= 0)) body.handGrip = [-1, -1];
   }
 }
