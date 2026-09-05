@@ -15,4 +15,5 @@ export default {
   name: __t.string(),
   teamNumber: __t.u32(),
   role: __t.u32(),
+  ruleset: __t.u32(),
 };

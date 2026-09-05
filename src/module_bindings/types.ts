@@ -20,6 +20,7 @@ export const Player = __t.object("Player", {
   z: __t.f64(),
   action: __t.bool(),
   seen: __t.u64(),
+  online: __t.bool(),
 });
 export type Player = __Infer<typeof Player>;
 
@@ -29,6 +30,7 @@ export const Result = __t.object("Result", {
   team: __t.u32(),
   names: __t.string(),
   timeMs: __t.u32(),
+  ruleset: __t.u32(),
   created: __t.u64(),
 });
 export type Result = __Infer<typeof Result>;

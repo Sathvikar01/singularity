@@ -1,83 +1,91 @@
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
-const browser = await chromium.launch({
-  channel: "chrome",
-  headless: true,
-  args: ["--enable-webgl", "--ignore-gpu-blocklist"],
-});
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--enable-webgl", "--ignore-gpu-blocklist"] });
 const errors = [];
-page.on("pageerror", (e) => errors.push(e.message));
-try {
-  await page.goto("http://localhost:5173");
+const pages = [];
+const url = process.env.TEST_URL || "http://127.0.0.1:5173";
+async function open() {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  pages.push(page);
+  page.on("pageerror", e => errors.push(e.message));
+  await page.routeWebSocket(u => u.port === "5173", socket => socket.close());
+  await page.goto(url);
   await page.locator("canvas").waitFor();
-  await page.screenshot({ path: "test-results/desktop.png" });
+  return page;
+}
+try {
+  const page = await open();
+  assert.equal(await page.locator("[data-role]").count(), 5);
+  assert.deepEqual(await page.locator("[data-role] b").allTextContents(), ["Eyes", "Hands", "Torso", "Left Leg", "Right Leg"]);
+  await page.screenshot({ path: "test-results/five-role-desktop.png" });
+  await page.locator('[data-role="2"]').click();
   await page.locator("#practice").click();
-  await page.keyboard.down("w");
-  await page.waitForTimeout(2200);
-  await page.keyboard.up("w");
-  assert.notEqual(await page.locator("#timer").textContent(), "00:00.00");
-  await page.screenshot({ path: "test-results/practice.png" });
+  assert.equal(await page.locator("[data-role]:disabled").count(), 5);
+  assert.match(await page.locator("#instruction").textContent(), /Torso/);
+  await page.keyboard.press("1");
+  assert.equal(await page.locator('[data-role="2"]').getAttribute("aria-pressed"), "true");
+  // With no human brace, four AI teammates can reach but cannot clear the bridge.
+  await page.waitForFunction(() => document.querySelector("#objective-panel").dataset.stage === "1", null, { timeout: 20000 });
+  await page.waitForTimeout(1800);
+  assert.equal(await page.locator("#objective-panel").getAttribute("data-stage"), "1");
+  await page.keyboard.down(" ");
+  await page.locator("#finish-dialog").waitFor({ state: "visible", timeout: 60000 });
+  await page.keyboard.up(" ");
+  assert.match(await page.locator("#finish-label").textContent(), /UNRANKED/);
+  assert.equal(await page.locator("#objective-panel").getAttribute("data-stage"), "6");
+  await page.screenshot({ path: "test-results/five-role-practice-finish.png" });
+  await page.locator('[data-close="finish-dialog"]').click();
   await page.locator("#exit").click();
-  await page.locator("#open-lobby").click();
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#connection").textContent ===
-      "SPACETIMEDB CONNECTED",
-    { timeout: 15000 },
-  );
-  const code = "QA" + Date.now().toString().slice(-8);
-  await page.locator("#name").fill("Test pilot A");
-  await page.locator("#code").fill(code);
-  await page.locator("#join").click();
-  await page
-    .locator("#members")
-    .getByText("Test pilot A", { exact: false })
-    .waitFor();
-  const b = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await b.goto("http://localhost:5173/?room=" + code);
-  await b.waitForFunction(
-    () =>
-      document.querySelector("#connection").textContent ===
-      "SPACETIMEDB CONNECTED",
-  );
-  await b.locator("#name").fill("Test pilot B");
-  await b.locator("#join").click();
-  await b.waitForTimeout(500);
-  assert.match(
-    await b.locator("#network-error").textContent(),
-    /already has a pilot/,
-  );
-  await b.locator("#part").selectOption("5");
-  await b.locator("#join").click();
-  await page
-    .locator("#members")
-    .getByText("Test pilot B", { exact: false })
-    .waitFor();
-  assert.equal(await b.locator("#start").isVisible(), false);
+  assert.equal(await page.locator("[data-role]:disabled").count(), 0);
+  assert.equal(await page.locator("#join").isDisabled(), false);
+  const code = "UI" + Date.now().toString().slice(-8);
+  for (let i=0;i<5;i++) {
+    const p = i === 0 ? page : await open();
+    await p.locator("#open-lobby").click();
+    await p.waitForFunction(() => document.querySelector("#connection").textContent === "SPACETIMEDB CONNECTED");
+    await p.locator("#name").fill("UI " + i);
+    await p.locator("#code").fill(code);
+    await p.locator("#part").selectOption(String(i));
+    await p.locator("#join").click();
+    await p.locator("#members").getByText("UI " + i, { exact: false }).waitFor();
+    if (i === 0) assert.equal(await p.locator("#start").isDisabled(), true);
+  }
+  await page.waitForFunction(() => !document.querySelector("#start").disabled);
   await page.locator("#start").click();
   await page.waitForFunction(() => document.body.classList.contains("playing"));
-  await b.waitForFunction(() => document.body.classList.contains("playing"));
-  await page.waitForTimeout(3300);
-  assert.match(await page.locator("#race-status").textContent(), /RACING/);
-  assert.match(await b.locator("#race-status").textContent(), /RACING/);
-  await page.locator('[data-role="1"]').click();
-  await page.waitForTimeout(500);
-  assert.match(
-    await page.locator('[data-role="1"]').getAttribute("class"),
-    /active/,
-  );
-  await page.screenshot({ path: "test-results/multiplayer.png" });
-  await page.locator("#exit").click();
-  await b.locator("#exit").click();
-  await b.close();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: "test-results/mobile.png" });
-  assert.equal(await page.locator("#practice").isVisible(), true);
+  assert.equal(await page.locator("[data-role]:disabled").count(), 5);
+  await page.keyboard.press("5");
+  assert.equal(await page.locator('[data-role="0"]').getAttribute("aria-pressed"), "true");
+  await page.locator("#room-panel").click();
+  assert.equal(await page.locator("#part").isDisabled(), true);
+  assert.equal(await page.locator("#team").isDisabled(), true);
+  assert.equal(await page.locator("#join").isDisabled(), true);
+  await page.locator('[data-close="lobby"]').click();
+  await page.waitForFunction(() => document.querySelector("#race-status").textContent === "RACING");
+  await page.screenshot({ path: "test-results/five-role-multiplayer.png" });
+  // Reload uses the same session token and resumes exactly the server assignment.
+  await page.reload();
+  await page.waitForFunction(() => document.body.classList.contains("playing"));
+  assert.equal(await page.locator('[data-role="0"]').getAttribute("aria-pressed"), "true");
+  for (const p of pages) await p.locator("#exit").click();
+  const mobile = await open();
+  await mobile.setViewportSize({ width: 390, height: 844 });
+  await mobile.locator('[data-role="2"]').click();
+  await mobile.locator("#practice").click();
+  assert.equal(await mobile.locator(".touch .grab").textContent(), "BRACE");
+  assert.equal(await mobile.locator("#objective-panel").isVisible(), true);
+  await mobile.screenshot({ path: "test-results/five-role-mobile.png" });
+  const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  assert.equal(overflow, false);
+  const touchBox = await mobile.locator(".touch .grab").boundingBox();
+  await mobile.mouse.move(touchBox.x + 10, touchBox.y + 10);
+  await mobile.mouse.down();
+  await mobile.waitForFunction(() => document.querySelector("#role-feedback").textContent.includes("BRACED"));
+  assert.match(await mobile.locator("#role-feedback").textContent(), /BRACED/);
+  await mobile.mouse.up();
+  await mobile.locator("#room-panel").click();
+  assert.equal(await mobile.locator("#part").isDisabled(), false);
+  assert.equal(await mobile.locator("#join").isDisabled(), false);
   assert.deepEqual(errors, []);
-  console.log(
-    "PASS: rendering, practice, cloud connection, two clients, role conflicts, host start, shared countdown, live role switching, mobile layout, no page errors.",
-  );
-} finally {
-  await browser.close();
-}
+  console.log("PASS: five-role desktop/mobile UI, human-required practice completion, keyboard/card/lobby locks, five-client readiness, countdown and reload reconnect; no page errors.");
+} finally { await browser.close(); }

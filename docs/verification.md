@@ -1,21 +1,12 @@
-# Verified competitive core
+# Five-role Three.js verification
 
-Verified on 2026-09-05 with Node 24, Chrome, SpacetimeDB CLI 2.9 and SDK 2.10.
+Verification commands and local backend setup are in ../README.md.
 
-| Check | Result |
-| --- | --- |
-| Pure simulation tests | 9 passed |
-| Client TypeScript / production build | Passed |
-| SpacetimeDB module build / Maincloud publish | Passed |
-| Two browser clients against cloud | Shared lobby, exclusive roles, host start, countdown, role switching, exit passed |
-| Six clients / two simultaneous teams | Both completed all three stages |
-| Ranked server times | Team 1: 13.286s; Team 2: 14.680s |
-| Persistence and cleanup | Results remained after disconnect; empty room removed |
-| Rematch | Countdown and body/progress/times reset; prior results retained |
-| Hosted production Space | Assets, WebGL, full practice completion and live leaderboard passed |
+Verified locally on 2026-09-05: 23 unit tests passed; TypeScript/Vite and SpacetimeDB builds passed; twenty clients completed four concurrent ranked races; the desktop/mobile browser suite passed; the production-built frontend completed practice and subscribed to the leaderboard without page errors. Production deployment was not performed.
 
-Run commands are in the README. Test screenshots are local under `test-results/` and ignored by git. Automated ranked completion runs use a separate local database, preserving the public leaderboard for players.
+- Unit suite: deterministic full-course runs, all five role-omission cases, five practice input-isolation cases, Eyes aim isolation, dual-arm control, cargo release, simultaneous foot switches, gate ordering, checkpoint recovery, joint bounds, finite/bounded input, finished clocks and snapshot version checks.
+- Multiplayer suite: twenty independent clients and four full ranked finishes; incomplete crews, sixth roles, legacy protocols, role conflicts, host-only start, countdown/racing assignment locks, leave/rejoin, disconnect/resume, host migration, input expiry, rematch reset, persistence and cleanup.
+- Browser suite: desktop and mobile role UI, role locks, human-required practice completion, crew readiness, countdown, reload recovery and touch controls.
+- Production smoke suite: leaderboard subscription and complete unranked practice against a built frontend.
 
-## Scope
-
-One complete three-stage course, six controlled body parts, four teams, assisted unranked solo mode, touch controls, audio cues, persistent SpacetimeDB results. The physics model is an intentionally compact position-based articulated body. Teams do not physically collide with each other. Twenty-four concurrent humans, prolonged network outages and large-room-count load have not been stress-tested. No native Unreal binary, voice chat or matchmaking is included.
+All mutating multiplayer tests target the isolated local singularity-five-role-test database. No cloud publication is performed by these tests. Screenshots are ignored under test-results/. Automated clients are not a substitute for human playtesting or a prolonged load test.

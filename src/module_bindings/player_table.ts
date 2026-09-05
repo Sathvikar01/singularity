@@ -20,4 +20,5 @@ export default __t.row({
   z: __t.f64(),
   action: __t.bool(),
   seen: __t.u64(),
+  online: __t.bool(),
 });

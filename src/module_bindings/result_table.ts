@@ -16,5 +16,6 @@ export default __t.row({
   team: __t.u32(),
   names: __t.string(),
   timeMs: __t.u32().name("time_ms"),
+  ruleset: __t.u32(),
   created: __t.u64(),
 });

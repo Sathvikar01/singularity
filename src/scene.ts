@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type Body, LINKS } from "../shared/physics";
+import { type Body, LINKS, COURSE, beacon, scanError, sweepX } from "../shared/physics";
 const COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
 export function createScene(container: HTMLElement) {
   const scene = new THREE.Scene();
@@ -68,7 +68,7 @@ export function createScene(container: HTMLElement) {
     c.fillStyle = color;
     c.font = "700 48px sans-serif";
     c.textAlign = "center";
-    c.fillText(text, 256, 75);
+    c.fillText(text, 256, 75, 480);
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: new THREE.CanvasTexture(canvas),
@@ -84,7 +84,7 @@ export function createScene(container: HTMLElement) {
   for (const [z, d] of [
     [1, 12],
     [21, 12],
-    [36, 18],
+    [46, 38],
   ]) {
     box(9.2, 0.7, d, 0, -0.4, z, floor);
     box(9.6, 0.2, d + 0.3, 0, -0.85, z, dark);
@@ -97,27 +97,44 @@ export function createScene(container: HTMLElement) {
   }
   box(2.6, 0.4, 8, 0, -0.2, 11, dark);
   for (let z = 7; z < 15; z += 0.8) box(2.5, 0.04, 0.06, 0, 0.03, z, accent);
-  for (const z of [0, 15, 28, 42]) {
+  for (const z of [0, 16, 28, 35, 49, 60]) {
     for (let x = -4; x < 4; x += 0.55)
-      box(0.28, 0.025, 0.4, x, 0.03, z, z === 42 ? dark : accent);
+      box(0.28, 0.025, 0.4, x, 0.03, z, z === 60 ? dark : accent);
   }
   for (const [z, title] of [
-    [6, "01  /  THE CROSSING"],
-    [17, "02  /  SPECIAL DELIVERY"],
-    [29, "03  /  SWEEP STAKES"],
+    [3, "01  /  FIRST CONTACT"],
+    [10, "02  /  HOLD THE LINE"],
+    [21, "03  /  SPECIAL DELIVERY"],
+    [31, "04  /  TWO TO TANGO"],
+    [41, "05  /  STORM WATCH"],
+    [56, "06  /  HOME STRETCH"],
   ] as const) {
     label(title, 0, 4.6, z, "#c5f8e9", 5.5);
   }
   box(4, 0.05, 3, 0, 0.04, 25.5, accent);
   label("CARGO DROP", 0, 0.7, 26, "#ffffff", 2.8);
   for (const x of [-3.8, 3.8]) {
-    box(0.3, 6, 0.3, x, 3, 42, dark);
-    box(0.1, 5.5, 0.34, x, 3, 41.98, accent);
+    box(0.3, 6, 0.3, x, 3, 60, dark);
+    box(0.1, 5.5, 0.34, x, 3, 59.98, accent);
   }
-  box(8, 0.6, 0.5, 0, 6, 42, dark);
-  label("FINISH", 0, 6, 41.6, "#b7ffe2", 4);
-  const sweeper = box(0.6, 1.1, 6, 0, 1.1, 33.5, coral);
-  box(9, 0.16, 0.3, 0, 0.1, 33.5, dark);
+  box(8, 0.6, 0.5, 0, 6, 60, dark);
+  label("FINISH", 0, 6, 59.6, "#b7ffe2", 4);
+  const sweeper = box(0.6, 1.1, 7, 0, 1.1, 42.5, coral);
+  box(9, 0.16, 0.3, 0, 0.1, 42.5, dark);
+  const barriers = COURSE.slice(0, -1).map(c => {
+    const material = new THREE.MeshBasicMaterial({ color: 0xffcc70, transparent: true, opacity: .24, depthWrite: false });
+    const barrier = box(9.2, 3.2, .07, 0, 1.6, c.gate, material);
+    return barrier;
+  });
+  const beaconMesh = box(.5, .5, .5, 3, 3, 7, new THREE.MeshBasicMaterial({ color: 0xffcc70 }));
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(.025, .055, 1, 8), new THREE.MeshBasicMaterial({ color: 0xffcc70, transparent: true, opacity: .75 }));
+  scene.add(beam);
+  const footPads = [-.45, .45].map((x, i) => {
+    label(i === 0 ? "L" : "R", x, .8, 33, "#b7ffe2", .6);
+    const pad = box(.85, .06, 2.5, x, .05, 33, mat(0x385c62));
+    return pad;
+  });
+  label("BRACE", 0, .65, 15.5, "#b7ffe2", 2);
   for (let i = 0; i < 70; i++) {
     const angle = i * 2.399;
     const radius = 20 + (i % 9) * 3;
@@ -142,8 +159,7 @@ export function createScene(container: HTMLElement) {
       Math.cos(i * 7.23) * 90,
     );
   starGeo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-  scene.add(
-    new THREE.Points(
+  const stars = new THREE.Points(
       starGeo,
       new THREE.PointsMaterial({
         color: 0x8ca9b8,
@@ -151,8 +167,8 @@ export function createScene(container: HTMLElement) {
         transparent: true,
         opacity: 0.65,
       }),
-    ),
   );
+  scene.add(stars);
   const robots = new Map<
     number,
     {
@@ -232,33 +248,28 @@ export function createScene(container: HTMLElement) {
     look = new THREE.Vector3(0, 1, 6);
   let follow = false;
   function update(bodies: Map<number, Body>, selected: number, time: number) {
-    for (const [id, r] of robots) {
-      const visible = bodies.has(id);
-      [...r.nodes, ...r.links, r.cube, r.eyes, r.ring].forEach(
-        (o) => (o.visible = visible),
-      );
-    }
-    for (const [id, b] of bodies) {
-      const r = robots.get(id) || robot(id);
-      b.nodes.forEach((p, i) =>
-        r.nodes[i].position.lerp(v.set(p.x, p.y, p.z), 0.5),
-      );
-      r.links.forEach((m, i) => {
-        const [a, c] = LINKS[i],
-          p = r.nodes[a].position,
-          q = r.nodes[c].position;
-        m.position.copy(p).add(q).multiplyScalar(0.5);
-        v.copy(q).sub(p);
-        m.scale.y = v.length();
-        m.quaternion.setFromUnitVectors(up, v.normalize());
-      });
-      r.eyes.position.copy(r.nodes[1].position);
-      r.eyes.rotation.y = b.look + (follow ? 0 : Math.PI);
-      r.cube.position.lerp(v.set(b.cube.x, b.cube.y, b.cube.z), 0.5);
-      r.cube.rotation.y = time * 0.2;
-      r.ring.position.set(b.nodes[0].x, 0.06, b.nodes[0].z);
-      r.cube.visible = !b.delivered;
-    }
+      for (const [id, r] of robots) {
+        const visible = bodies.has(id);
+        [...r.nodes, ...r.links, r.cube, r.eyes, r.ring].forEach((o) => (o.visible = visible));
+      }
+      for (const [id, b] of bodies) {
+        const r = robots.get(id) || robot(id);
+        b.nodes.forEach((p, i) => r.nodes[i].position.lerp(v.set(p.x, p.y, p.z), 0.5));
+        r.links.forEach((m, i) => {
+          const [a, c] = LINKS[i], p = r.nodes[a].position, q = r.nodes[c].position;
+          m.position.copy(p).add(q).multiplyScalar(0.5);
+          v.copy(q).sub(p);
+          m.scale.y = v.length();
+          m.quaternion.setFromUnitVectors(up, v.normalize());
+        });
+        r.eyes.position.copy(r.nodes[1].position);
+        r.eyes.rotation.y = b.look + (follow ? 0 : Math.PI);
+        r.cube.position.lerp(v.set(b.cube.x, b.cube.y, b.cube.z), 0.5);
+        r.cube.rotation.y = time * 0.2;
+        r.ring.position.set(b.nodes[0].x, 0.06, b.nodes[0].z);
+        r.ring.scale.setScalar(b.brace ? 1.5 : 1);
+        r.cube.visible = !b.delivered;
+      }
     const b = bodies.get(selected);
     if (b && follow) {
       const p = b.nodes[0];
@@ -269,9 +280,22 @@ export function createScene(container: HTMLElement) {
       look.lerp(v.set(0, 1, 8), 0.03);
     }
     camera.lookAt(look);
-    sweeper.position.x = b
-      ? Math.sin((b.ticks / 30) * 1.8) * 3.6
-      : Math.sin(time * 1.8) * 3.6;
+    const sweeperX = b ? sweepX(b.ticks) : Math.sin(time * 1.8) * 3.6;
+    sweeper.position.x = sweeperX;
+    barriers.forEach((m, i) => { m.visible = !b || b.stage <= i; });
+    if (b) {
+      const target = beacon(b), head = b.nodes[1];
+      beaconMesh.position.set(target.x, head.y, target.z);
+      beaconMesh.rotation.y = time;
+      beaconMesh.visible = b.stage === 0 || b.stage === 4;
+      beam.visible = follow && beaconMesh.visible;
+      const length = 5;
+      beam.position.set(head.x + Math.sin(b.look) * length / 2, head.y, head.z + Math.cos(b.look) * length / 2);
+      beam.scale.y = length;
+      beam.quaternion.setFromUnitVectors(up, v.set(Math.sin(b.look), 0, Math.cos(b.look)));
+      (beam.material as THREE.MeshBasicMaterial).color.setHex(Math.abs(scanError(b)) < .18 ? 0x91dfc5 : 0xffcc70);
+      footPads.forEach((m, i) => (m.material as THREE.MeshStandardMaterial).color.setHex(b.stage > 3 || b.feet[i] > 0 ? 0x91dfc5 : 0x385c62));
+    }
     renderer.render(scene, camera);
   }
   const resize = () => {
@@ -283,5 +307,8 @@ export function createScene(container: HTMLElement) {
   };
   window.addEventListener("resize", resize);
   resize();
-  return { update, setFollow: (f: boolean) => (follow = f) };
+  return {
+    update,
+    setFollow: (f: boolean) => (follow = f),
+  };
 }

@@ -18,4 +18,4 @@ Validation: test role-specific forces, joint bounds, falls, ordered checkpoint c
 - Two Chrome clients verify cloud role conflicts, host-only start, shared countdown, live role switching and exit. Desktop/mobile screenshots inspected.
 - Six independent local SpacetimeDB clients complete two simultaneous team races in 13.286 and 14.680 seconds. Rankings, completed match state, persistent results after reconnect, empty-room cleanup and rematch reset verified.
 - Deployed static Space completes a full assisted practice run in Chrome and connects to the live leaderboard without page errors.
-- Procedural Three.js assets and a custom constrained-body solver keep the game browser-playable. No Unreal streaming host or paid GPU resources were created.
+- Procedural Three.js assets and a custom constrained-body solver keep the game browser-playable.

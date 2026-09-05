@@ -7,7 +7,7 @@ try {
   });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("https://sankalphs-singularity.static.hf.space/index.html");
+  await page.goto(process.env.TEST_URL || "https://sankalphs-singularity1.static.hf.space/");
   await page.locator("canvas").waitFor();
   await page.locator("#leaders").click();
   await page.waitForFunction(
@@ -20,13 +20,13 @@ try {
     /Connecting|Unable/,
   );
   await page.locator('[data-close="leader-dialog"]').click();
+  assert.equal(await page.locator("[data-role]").count(), 5);
+  await page.locator('[data-role="2"]').click();
   await page.locator("#practice").click();
-  await page.keyboard.down("w");
   await page.keyboard.down(" ");
   await page
     .locator("#finish-dialog")
-    .waitFor({ state: "visible", timeout: 35000 });
-  await page.keyboard.up("w");
+    .waitFor({ state: "visible", timeout: 60000 });
   await page.keyboard.up(" ");
   assert.match(await page.locator("#finish-label").textContent(), /UNRANKED/);
   await page.screenshot({ path: "test-results/live-finish.png" });

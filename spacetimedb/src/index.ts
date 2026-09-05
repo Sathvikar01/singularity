@@ -4,7 +4,8 @@ import {
   createBody,
   step,
   neutralInputs,
-  elapsedMs,
+  RULESET,
+  ROLES,
   type Body,
 } from "../../shared/physics";
 const room = table(
@@ -29,6 +30,7 @@ const player = table(
     z: t.f64(),
     action: t.bool(),
     seen: t.u64(),
+    online: t.bool(),
   },
 );
 const team = table(
@@ -49,6 +51,7 @@ const result = table(
     team: t.u32(),
     names: t.string(),
     timeMs: t.u32(),
+    ruleset: t.u32(),
     created: t.u64(),
   },
 );
@@ -64,18 +67,25 @@ export const init = db.init((ctx) => {
   ctx.db.tick.insert({ id: 0n, scheduledAt: ScheduleAt.interval(33333n) });
 });
 export const join = db.reducer(
-  { code: t.string(), name: t.string(), teamNumber: t.u32(), role: t.u32() },
+  { code: t.string(), name: t.string(), teamNumber: t.u32(), role: t.u32(), ruleset: t.u32() },
   (ctx, a) => {
+    if (a.ruleset !== RULESET) throw new SenderError("Update your client to join this five-role course.");
     const code = a.code.trim().toUpperCase();
     if (
       !/^[A-Z0-9]{3,12}$/.test(code) ||
-      a.role > 5 ||
+      a.role >= ROLES.length ||
       a.teamNumber > 3 ||
       !a.name.trim()
     )
       throw new SenderError(
         "Enter a room code (3–12 letters/numbers), name, and valid role.",
       );
+    const previous = ctx.db.player.id.find(ctx.sender);
+    const priorRoom = previous && ctx.db.room.id.find(previous.room);
+    const locked = (state?: string) => state === "countdown" || state === "racing";
+    if (previous && locked(priorRoom?.state) &&
+      (previous.room !== code || previous.team !== a.teamNumber || previous.role !== a.role))
+      throw new SenderError("Your team and role are locked until this race ends.");
     let r = ctx.db.room.id.find(code);
     if (!r) {
       if ([...ctx.db.room.iter()].length >= 200)
@@ -88,14 +98,12 @@ export const join = db.reducer(
         created: now(ctx),
       });
     }
-    const previous = ctx.db.player.id.find(ctx.sender);
     if (
-      r.state !== "lobby" &&
-      (!ctx.db.team.id.find(code + ":" + a.teamNumber) ||
-        (previous?.room === code && previous.team !== a.teamNumber))
+      locked(r.state) &&
+      (!previous || previous.room !== code || previous.team !== a.teamNumber || previous.role !== a.role)
     )
       throw new SenderError(
-        "This race has started. Join an existing team or choose another room.",
+        "This race is locked. Only its assigned pilots can reconnect.",
       );
     for (const p of ctx.db.player.iter())
       if (
@@ -111,11 +119,12 @@ export const join = db.reducer(
       room: code,
       team: a.teamNumber,
       role: a.role,
-      name: a.name.trim().slice(0, 20),
+      name: locked(r.state) ? previous!.name : a.name.trim().slice(0, 20),
       x: 0,
       z: 0,
       action: false,
       seen: now(ctx),
+      online: true,
     });
     const id = code + ":" + a.teamNumber;
     if (!ctx.db.team.id.find(id))
@@ -132,7 +141,8 @@ export const input = db.reducer(
   { x: t.f64(), z: t.f64(), action: t.bool() },
   (ctx, a) => {
     const p = ctx.db.player.id.find(ctx.sender);
-    if (!p) return;
+    if (!p || !p.online) return;
+    if (ctx.db.room.id.find(p.room)?.state !== "racing") return;
     if (!Number.isFinite(a.x) || !Number.isFinite(a.z))
       throw new SenderError("Invalid input");
     if (now(ctx) - p.seen < 25000n) return;
@@ -153,6 +163,16 @@ export const start = db.reducer((ctx) => {
     throw new SenderError("Only the room host can start a race");
   if (r.state !== "lobby" && r.state !== "finished")
     throw new SenderError("Race already running");
+  const members = [...ctx.db.player.iter()].filter(q => q.room === r.id);
+  const activeTeams = new Set(members.filter(q => q.online).map(q => q.team));
+  for (const number of activeTeams) {
+    if (!ROLES.every((_, role) => members.some(q => q.team === number && q.role === role && q.online)))
+      throw new SenderError(`Team ${number + 1} needs all five connected roles before starting.`);
+  }
+  for (const q of members) {
+    if (!activeTeams.has(q.team)) ctx.db.player.id.delete(q.id);
+    else ctx.db.player.id.update({ ...q, x: 0, z: 0, action: false, seen: 0n });
+  }
   for (const tm of ctx.db.team.iter())
     if (tm.room === r.id)
       ctx.db.team.id.update({
@@ -166,12 +186,17 @@ export const start = db.reducer((ctx) => {
     startAt: now(ctx) + 3000000n,
   });
 });
-export const leave = db.reducer((ctx) => {
-  ctx.db.player.id.delete(ctx.sender);
-});
-export const disconnected = db.clientDisconnected((ctx) => {
-  ctx.db.player.id.delete(ctx.sender);
-});
+// A disconnected pilot retains the same match lease. Leaving cannot bypass the lock.
+const releasePlayer = (ctx: any) => {
+  const p = ctx.db.player.id.find(ctx.sender);
+  if (!p) return;
+  const r = ctx.db.room.id.find(p.room);
+  if (r && (r.state === "countdown" || r.state === "racing"))
+    ctx.db.player.id.update({ ...p, online: false, x: 0, z: 0, action: false, seen: 0n });
+  else ctx.db.player.id.delete(ctx.sender);
+};
+export const leave = db.reducer(releasePlayer);
+export const disconnected = db.clientDisconnected(releasePlayer);
 export const simulate = db.reducer(
   { onSchedule: tick },
   { arg: tick.rowType },
@@ -181,14 +206,15 @@ export const simulate = db.reducer(
     for (const r0 of ctx.db.room.iter()) {
       let r = r0;
       const members = players.filter((p) => p.room === r.id);
-      if (!members.length) {
+      if (!members.some(p => p.online)) {
+        for (const p of members) ctx.db.player.id.delete(p.id);
         for (const tm of ctx.db.team.iter())
           if (tm.room === r.id) ctx.db.team.id.delete(tm.id);
         ctx.db.room.id.delete(r.id);
         continue;
       }
-      if (!members.some((p) => p.id.isEqual(r.host))) {
-        r = { ...r, host: members[0].id };
+      if (!members.some((p) => p.online && p.id.isEqual(r.host))) {
+        r = { ...r, host: members.find(p => p.online)!.id };
         ctx.db.room.id.update(r);
       }
       if (r.state === "countdown" && time >= r.startAt) {
@@ -207,9 +233,10 @@ export const simulate = db.reducer(
           continue;
         }
         const b = JSON.parse(tm.body) as Body;
+        if (b.version !== RULESET) { ctx.db.room.id.update({ ...r, state: "finished" }); continue; }
         const inputs = neutralInputs();
         for (const p of members)
-          if (p.team === tm.number && time - p.seen < 500000n)
+          if (p.online && p.team === tm.number && p.role < ROLES.length && time - p.seen < 500000n)
             inputs[p.role] = { x: p.x, z: p.z, action: p.action };
         step(b, inputs);
         // Wall-clock time is authoritative; simulation lag never improves a ranked result.
@@ -228,6 +255,7 @@ export const simulate = db.reducer(
               .map((p) => p.name)
               .join(", "),
             timeMs: finishMs,
+            ruleset: RULESET,
             created: time,
           });
         }
