@@ -6,24 +6,20 @@ import {
   CREW_SIZES,
   RULESET,
   challengeFor,
-  createBody,
-  decodeSnapshot,
-  elapsedMs,
   formatTime,
   isChallenge,
   isCrewSize,
   isFinalAligned,
-  practiceInputs,
   rolesFor,
   securelyHeld,
   stageProgressValue,
-  step,
   type Body,
   type ChallengeId,
   type CrewSize,
   type Input,
 } from "../shared/physics";
-import { connect } from "./network";
+import { createRaceSession, type RaceSessionSignal, type RaceSessionView } from "./race-session";
+import { connect, readRankedProjection } from "./network";
 import type { DbConnection } from "./module_bindings";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -158,26 +154,15 @@ try {
   throw error;
 }
 
-let selectedChallenge: ChallengeId = CHALLENGE.Easy;
-let selectedCrew: CrewSize = 5;
 let leaderboardChallenge: ChallengeId = CHALLENGE.Easy;
 let leaderboardCrew: CrewSize = 5;
-let practice = false;
-let playing = false;
-let role = 4;
-let myTeam = 0;
-let body = createBody(selectedChallenge, selectedCrew);
+const race = createRaceSession();
 let conn: DbConnection | undefined;
 let ready = false;
-let roomCode = "";
-let lastStage = 0;
-let lastFalls = 0;
-let lastMistakes = 0;
-let finishShown = false;
-let matchKey = "";
+let allowRankedAdoption = false;
 let muted = false;
 let audio: AudioContext | undefined;
-const bodies = new Map<number, Body>([[0, body]]);
+const renderBodies = new Map<number, Body>();
 const keys = new Set<string>();
 let toastTimer: ReturnType<typeof setTimeout>;
 
@@ -221,29 +206,22 @@ function roleIcon(index: number, crewSize: CrewSize) {
   return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M11 4h5l-1 12-4 12H5l4-13 2-11Zm10 0h-5l1 12 4 12h6l-4-13-2-11Z"/></svg>`;
 }
 
-function assignmentLocked() {
-  const state = ready && roomCode ? conn?.db.room.id.find(roomCode)?.state : undefined;
-  return (practice && playing) || state === "countdown" || state === "racing" || (playing && !ready && !practice);
-}
-
 function joinedRoom() {
-  return Boolean(ready && roomCode && conn?.identity && conn.db.player.id.find(conn.identity));
-}
-
-function configLocked() {
-  return assignmentLocked() || joinedRoom();
+  return race.view(Date.now()).mode === "ranked";
 }
 
 function selectRole(value: number) {
-  if (assignmentLocked() || !Number.isInteger(value) || value < 0 || value >= rolesFor(selectedCrew).length) return;
-  role = value;
+  const signals = race.dispatch({ type: "select-role", role: value });
+  if (signals.length) { handleSignals(signals); return; }
   drawRoles();
 }
 
 function drawRoles() {
+  const view = race.view(Date.now());
+  const selectedCrew = view.setup.crewSize;
+  const role = view.roleSelection;
   const roles = rolesFor(selectedCrew);
-  if (role >= roles.length) role = roles.length - 1;
-  const locked = assignmentLocked();
+  const locked = view.roleLocked;
   $("role-cards").innerHTML = roles.map((definition, index) => `
     <button class="role ${index === role ? "active" : ""}" data-role="${index}" aria-pressed="${index === role}" ${locked ? "disabled" : ""} title="${locked ? "Assigned for this race" : definition.help}">
       <kbd>ROLE ${index + 1}</kbd><div class="role-icon">${roleIcon(index, selectedCrew)}</div><b>${definition.name}</b>
@@ -259,15 +237,15 @@ function drawRoles() {
   updateActionLabel();
   const dockHeading = document.querySelector<HTMLElement>(".dock-heading b")!;
   const dockHelper = document.querySelector<HTMLElement>(".dock-heading span")!;
-  dockHeading.textContent = practice ? "SOLO PRACTICE · YOUR PART" : locked ? "CREW ASSIGNMENTS · LOCKED" : `${selectedCrew}-PART BODY · PICK YOUR PART`;
-  dockHelper.textContent = practice ? "AI controls every other part." : locked ? "One pilot per part. Every part matters." : "Solo Practice fills every other part with AI.";
-  if (practice) {
+  dockHeading.textContent = view.mode === "practice" ? "SOLO PRACTICE · YOUR PART" : locked ? "CREW ASSIGNMENTS · LOCKED" : `${selectedCrew}-PART BODY · PICK YOUR PART`;
+  dockHelper.textContent = view.mode === "practice" ? "AI controls every other part." : locked ? "One pilot per part. Every part matters." : "Solo Practice fills every other part with AI.";
+  if (view.mode === "practice") {
     roles.forEach((_, index) => { $("pilot-" + index).textContent = index === role ? "YOU CONTROL THIS" : "AI CONTROLLED"; });
   }
 }
 
 function updateCourseUI() {
-  const challenge = challengeFor(selectedChallenge);
+  const challenge = challengeFor(race.view(Date.now()).setup.challenge);
   $("course-difficulty").textContent = challenge.difficulty;
   $("course-penalty").textContent = `+${challenge.fallPenaltyMs / 1000}s per fall`;
   $("course-title").textContent = challenge.name;
@@ -283,6 +261,7 @@ function updateCourseUI() {
 }
 
 function updateHelp() {
+  const selectedCrew = race.view(Date.now()).setup.crewSize;
   const roles = rolesFor(selectedCrew);
   $("help-title").textContent = `${selectedCrew} minds. ${roles.length} essential jobs.`;
   $("help-roles").replaceChildren(...roles.map(definition => {
@@ -295,23 +274,25 @@ function updateHelp() {
 }
 
 function setMode(nextChallenge: number, nextCrew: number, announce = false) {
-  if (configLocked()) {
-    if (announce) toast("Leave the current room or course before changing its setup.");
+  const current = race.view(Date.now()).setup;
+  const challenge = isChallenge(nextChallenge) ? nextChallenge : current.challenge;
+  const crewSize = isCrewSize(nextCrew) ? nextCrew : current.crewSize;
+  const signals = race.dispatch({ type: "configure", challenge, crewSize });
+  if (signals.length) {
+    if (announce) handleSignals(signals);
     return;
   }
-  if (isChallenge(nextChallenge)) selectedChallenge = nextChallenge;
-  if (isCrewSize(nextCrew)) selectedCrew = nextCrew;
-  if (role >= rolesFor(selectedCrew).length) role = rolesFor(selectedCrew).length - 1;
-  body = createBody(selectedChallenge, selectedCrew);
-  bodies.clear(); bodies.set(0, body);
-  scene.setChallenge(selectedChallenge);
+  const view = race.view(Date.now());
+  scene.setChallenge(view.setup.challenge);
   updateModeControls();
   drawRoles(); updateCourseUI(); updateHelp();
-  if (announce) toast(`${challengeFor(selectedChallenge).difficulty} · ${selectedCrew}-pilot setup selected.`);
+  if (announce) toast(`${challengeFor(view.setup.challenge).difficulty} · ${view.setup.crewSize}-pilot setup selected.`);
 }
 
 function updateModeControls() {
-  const locked = configLocked();
+  const view = race.view(Date.now());
+  const { challenge: selectedChallenge, crewSize: selectedCrew } = view.setup;
+  const locked = view.configLocked;
   document.querySelectorAll<HTMLButtonElement>("[data-home-challenge], [data-lobby-challenge]").forEach(button => {
     const active = Number(button.dataset.homeChallenge ?? button.dataset.lobbyChallenge) === selectedChallenge;
     button.setAttribute("aria-pressed", String(active)); button.classList.toggle("active", active); button.disabled = locked;
@@ -327,29 +308,65 @@ function updateModeControls() {
 }
 
 document.querySelectorAll<HTMLButtonElement>("[data-home-challenge], [data-lobby-challenge]").forEach(button => {
-  button.onclick = () => setMode(Number(button.dataset.homeChallenge ?? button.dataset.lobbyChallenge), selectedCrew, true);
+  button.onclick = () => setMode(Number(button.dataset.homeChallenge ?? button.dataset.lobbyChallenge), race.view(Date.now()).setup.crewSize, true);
 });
 document.querySelectorAll<HTMLButtonElement>("[data-home-crew], [data-lobby-crew]").forEach(button => {
-  button.onclick = () => setMode(selectedChallenge, Number(button.dataset.homeCrew ?? button.dataset.lobbyCrew), true);
+  button.onclick = () => setMode(race.view(Date.now()).setup.challenge, Number(button.dataset.homeCrew ?? button.dataset.lobbyCrew), true);
 });
 
-function enter() {
-  playing = true; finishShown = false; lastStage = 0; lastFalls = 0; lastMistakes = 0;
+function enter(view: RaceSessionView) {
   document.body.classList.add("playing");
-  document.body.dataset.challenge = String(selectedChallenge);
-  scene.setChallenge(selectedChallenge); scene.setFollow(true);
+  document.body.dataset.challenge = String(view.setup.challenge);
+  scene.setChallenge(view.setup.challenge); scene.setFollow(true);
   ($("lobby") as HTMLDialogElement).close();
+  ($("finish-dialog") as HTMLDialogElement).close();
   updateCourseUI();
 }
 
+function handleSignals(signals: readonly RaceSessionSignal[]) {
+  for (const signal of signals) {
+    const view = race.view(Date.now());
+    const challenge = challengeFor(view.setup.challenge);
+    if (signal.type === "leave-ranked") {
+      allowRankedAdoption = false;
+      if (conn) void conn.reducers.leave({}).catch(() => {});
+    } else if (signal.type === "play-started") {
+      enter(view);
+      drawRoles();
+      if (signal.mode === "practice") {
+        $("mode-label").textContent = `${challenge.difficulty.toUpperCase()} / ${view.setup.crewSize}-PILOT PRACTICE`;
+        $("race-status").textContent = `${view.setup.crewSize - 1} AI TEAMMATES · YOUR ROLE IS LOCKED`;
+        $("standings").textContent = "";
+        toast(rolesFor(view.setup.crewSize)[view.controlledRole].help);
+        beep();
+      }
+    } else if (signal.type === "stage-cleared") {
+      beep(650);
+      toast(challenge.stages[signal.stage]?.hint ?? `All ${challenge.stages.length} objectives cleared!`);
+    } else if (signal.type === "fell") {
+      beep(180);
+      toast(`Back to your checkpoint. +${challenge.fallPenaltyMs / 1000} second fall penalty.`);
+    } else if (signal.type === "timing-missed") {
+      beep(130);
+      toast(`Missed launch window. +${challenge.timingPenaltyMs / 1000} seconds. Reset and resync.`);
+    } else if (signal.type === "completed") {
+      $("finish-time").textContent = formatTime(signal.finishMs);
+      $("finish-label").textContent = signal.ranked ? "VERIFIED TEAM FINISH" : "PRACTICE COMPLETE / UNRANKED";
+      $("finish-detail").textContent = `${challenge.difficulty} · ${view.setup.crewSize} pilots · ${view.body.falls} falls · ${view.body.mistakes} timing mistakes · ${(view.body.penaltyMs / 1000).toFixed(0)}s total penalties. ${signal.ranked ? "Saved to the matching persistent leaderboard." : "Bring your crew and turn coordination into competition."}`;
+      modal("finish-dialog");
+    } else if (signal.type === "ranked-ended-without-finish") {
+      toast("Race ended. No finish recorded for your team. Open the lobby for a rematch.");
+    } else if (signal.type === "command-rejected") {
+      toast(signal.error);
+    } else if (signal.type === "snapshot-rejected") {
+      console.warn(`Ignored invalid Team ${signal.team + 1} snapshot: ${signal.error}`);
+    }
+  }
+}
+
 function startPractice() {
-  if (conn && roomCode) void conn.reducers.leave({}).catch(() => {});
-  roomCode = ""; practice = true; body = createBody(selectedChallenge, selectedCrew);
-  bodies.clear(); bodies.set(0, body); myTeam = 0; keys.clear(); enter(); drawRoles();
-  $("mode-label").textContent = `${challengeFor(selectedChallenge).difficulty.toUpperCase()} / ${selectedCrew}-PILOT PRACTICE`;
-  $("race-status").textContent = `${selectedCrew - 1} AI TEAMMATES · YOUR ROLE IS LOCKED`;
-  $("standings").textContent = "";
-  toast(rolesFor(selectedCrew)[role].help); beep();
+  keys.clear();
+  handleSignals(race.dispatch({ type: "start-practice" }));
 }
 
 $("practice").onclick = startPractice;
@@ -358,26 +375,27 @@ $("sound").onclick = () => {
 };
 $("help").onclick = () => modal("help-dialog");
 $("exit").onclick = () => {
-  if (conn && roomCode) void conn.reducers.leave({}).catch(() => {});
-  playing = false; practice = false; roomCode = ""; keys.clear(); document.body.classList.remove("playing");
-  scene.setFollow(false); body = createBody(selectedChallenge, selectedCrew); bodies.clear(); bodies.set(0, body);
+  handleSignals(race.dispatch({ type: "leave" }));
+  keys.clear(); document.body.classList.remove("playing");
+  scene.setFollow(false);
   $("countdown").textContent = ""; updateModeControls(); drawRoles();
 };
-$("again").onclick = () => { ($("finish-dialog") as HTMLDialogElement).close(); practice ? startPractice() : modal("lobby"); };
+$("again").onclick = () => { ($("finish-dialog") as HTMLDialogElement).close(); race.view(Date.now()).mode === "practice" ? startPractice() : modal("lobby"); };
 
 function connectionError(message: string) {
   ready = false; $("connection").textContent = "MULTIPLAYER OFFLINE";
   $("network-error").textContent = `Multiplayer unavailable: ${message}. Solo practice is available.`;
   $("leader-list").textContent = "Unable to load verified results. The multiplayer server is unavailable.";
   ($("join") as HTMLButtonElement).disabled = false;
-  if (playing && !practice) toast("Disconnected. Race input is paused. Open the lobby to reconnect.");
+  const view = race.view(Date.now());
+  if (view.playing && view.mode === "ranked") toast("Disconnected. Race input is paused. Open the lobby to reconnect.");
 }
 
 function adoptRoomConfig(challenge: number, crewSize: number) {
   if (!isChallenge(challenge) || !isCrewSize(crewSize)) return;
-  selectedChallenge = challenge; selectedCrew = crewSize;
-  if (role >= rolesFor(selectedCrew).length) role = rolesFor(selectedCrew).length - 1;
-  scene.setChallenge(selectedChallenge); updateModeControls(); drawRoles(); updateCourseUI(); updateHelp();
+  const signals = race.dispatch({ type: "configure", challenge, crewSize });
+  if (signals.length && race.view(Date.now()).mode !== "ranked") return;
+  scene.setChallenge(race.view(Date.now()).setup.challenge); updateModeControls(); drawRoles(); updateCourseUI(); updateHelp();
 }
 
 function ensureConnection() {
@@ -387,22 +405,23 @@ function ensureConnection() {
   conn = connect(c => {
     conn = c; ready = true; $("connection").textContent = "SPACETIMEDB CONNECTED"; $("network-error").textContent = "";
     const me = c.identity && c.db.player.id.find(c.identity);
-    if (me && !practice) {
-      roomCode = me.room; role = me.role;
-      const room = c.db.room.id.find(me.room);
-      if (room) adoptRoomConfig(room.challenge, room.crewSize);
+    if (me && race.view(Date.now()).mode !== "practice") {
+      const projection = readRankedProjection(c, me.room);
+      if (projection) handleSignals(race.synchronize(projection, "adopt"));
       ($("code") as HTMLInputElement).value = me.room; ($("name") as HTMLInputElement).value = me.name;
       ($("team") as HTMLSelectElement).value = String(me.team);
-      if (!me.online) void c.reducers.join({ code: me.room, name: me.name, teamNumber: me.team, role: me.role, challenge: selectedChallenge, crewSize: selectedCrew, ruleset: RULESET }).catch(error => toast(String(error)));
+      const setup = race.view(Date.now()).setup;
+      if (!me.online) void c.reducers.join({ code: me.room, name: me.name, teamNumber: me.team, role: me.role, challenge: setup.challenge, crewSize: setup.crewSize, ruleset: RULESET }).catch(error => toast(String(error)));
     }
     refresh();
   }, refresh, connectionError);
 }
 
-$("room-panel").onclick = () => { if (practice) $("exit").click(); modal("lobby"); if (!ready) ensureConnection(); };
+$("room-panel").onclick = () => { if (race.view(Date.now()).mode === "practice") $("exit").click(); modal("lobby"); if (!ready) ensureConnection(); };
 $("open-lobby").onclick = () => { modal("lobby"); ensureConnection(); };
 $("leaders").onclick = () => {
-  leaderboardChallenge = selectedChallenge; leaderboardCrew = selectedCrew; updateLeaderboardFilters();
+  const setup = race.view(Date.now()).setup;
+  leaderboardChallenge = setup.challenge; leaderboardCrew = setup.crewSize; updateLeaderboardFilters();
   modal("leader-dialog"); ensureConnection(); refresh();
 };
 $("invite").onclick = async () => {
@@ -432,9 +451,13 @@ $("join").onclick = async () => {
     const code = ($("code") as HTMLInputElement).value.trim().toUpperCase();
     const knownRoom = conn!.db.room.id.find(code);
     if (knownRoom) adoptRoomConfig(knownRoom.challenge, knownRoom.crewSize);
-    await conn!.reducers.join({ code, name, teamNumber: Number(($("team") as HTMLSelectElement).value), role: Number(($("part") as HTMLSelectElement).value), challenge: selectedChallenge, crewSize: selectedCrew, ruleset: RULESET });
-    roomCode = code; role = Number(($("part") as HTMLSelectElement).value); practice = false; refresh(); beep();
-  } catch (error) { $("network-error").textContent = String(error); }
+    const setup = race.view(Date.now()).setup;
+    const role = Number(($("part") as HTMLSelectElement).value);
+    race.dispatch({ type: "select-role", role });
+    allowRankedAdoption = true;
+    await conn!.reducers.join({ code, name, teamNumber: Number(($("team") as HTMLSelectElement).value), role, challenge: setup.challenge, crewSize: setup.crewSize, ruleset: RULESET });
+    refresh(); beep();
+  } catch (error) { allowRankedAdoption = false; $("network-error").textContent = String(error); }
 };
 $("start").onclick = async () => { try { await conn!.reducers.start({}); } catch (error) { $("network-error").textContent = String(error); } };
 
@@ -459,55 +482,49 @@ document.querySelectorAll<HTMLButtonElement>("[data-leader-challenge]").forEach(
 
 function refresh() {
   if (!ready || !conn) return;
-  const players = [...conn.db.player.iter()];
-  const me = players.find(player => player.id.isEqual(conn!.identity!));
-  if (me && me.online && roomCode && !practice) {
-    roomCode = me.room; myTeam = me.team;
-    const room = conn.db.room.id.find(roomCode);
-    if (room) adoptRoomConfig(room.challenge, room.crewSize);
-    if (assignmentLocked()) role = me.role;
+  const projection = readRankedProjection(conn);
+  const before = race.view(Date.now());
+  if (projection && before.mode !== "practice") {
+    const sameRoom = before.mode === "ranked" && before.room?.code === projection.room.code;
+    if (sameRoom || allowRankedAdoption) {
+      handleSignals(race.synchronize(projection, sameRoom ? "update" : "adopt"));
+      allowRankedAdoption = false;
+    }
+  }
+  const view = race.view(Date.now());
+  if (view.mode === "ranked" && view.room) {
+    const { challenge: selectedChallenge, crewSize: selectedCrew } = view.setup;
+    const roomCode = view.room.code;
+    const myTeam = view.room.team;
+    scene.setChallenge(selectedChallenge);
+    updateCourseUI(); updateHelp();
     drawRoles();
     const roles = rolesFor(selectedCrew);
-    const members = players.filter(player => player.room === roomCode);
+    const members = view.members;
     $("members").replaceChildren(...members.map(player => {
       const element = document.createElement("div");
       element.textContent = `T${player.team + 1} · ${roles[player.role]?.name ?? "Unknown role"} — ${player.name}${player.online ? "" : " · DISCONNECTED / RESERVED"}`;
       return element;
     }));
-    $("start").hidden = !room?.host.isEqual(conn.identity!);
-    $("start").textContent = room?.state === "finished" ? "Race again" : "Start race";
+    $("start").hidden = !view.room.isHost;
+    $("start").textContent = view.phase === "finished" ? "Race again" : "Start race";
     roles.forEach((_, index) => { $("pilot-" + index).textContent = members.find(player => player.team === myTeam && player.role === index)?.name || "NEEDED BEFORE START"; });
-    const locked = assignmentLocked();
+    const locked = view.roleLocked;
     ($("join") as HTMLButtonElement).disabled = locked;
     for (const id of ["team", "code", "name"]) ($(id) as HTMLInputElement | HTMLSelectElement).disabled = locked;
-    const activeTeams = [...new Set(members.filter(player => player.online).map(player => player.team))];
-    const crewReady = activeTeams.length > 0 && activeTeams.every(team => roles.every((_, roleIndex) => members.some(player => player.team === team && player.role === roleIndex && player.online)));
-    ($("start") as HTMLButtonElement).disabled = locked || !crewReady;
-    $("start").title = crewReady ? `All ${selectedCrew} roles connected` : `Every active team needs ${selectedCrew} connected pilots`;
+    ($("start") as HTMLButtonElement).disabled = !view.canStart;
+    $("start").title = view.room.crewReady ? `All ${selectedCrew} roles connected` : `Every active team needs ${selectedCrew} connected pilots`;
     updateModeControls();
 
-    if (room && room.state !== "lobby" && !practice) {
-      const nextMatch = `${room.id}:${room.startAt}`;
-      if (!playing || matchKey !== nextMatch) { matchKey = nextMatch; enter(); ($("finish-dialog") as HTMLDialogElement).close(); }
+    if (view.playing) {
       $("mode-label").textContent = `${challengeFor(selectedChallenge).difficulty.toUpperCase()} · TEAM ${myTeam + 1} / ROOM ${roomCode}`;
-      $("race-status").textContent = room.state.toUpperCase();
-      const teams = [...conn.db.team.iter()].filter(team => team.room === roomCode && members.some(player => player.team === team.number)).sort((a, b) => (a.finishMs || Infinity) - (b.finishMs || Infinity));
-      bodies.clear();
-      const decodedTeams = teams.flatMap(team => {
-        const snapshot = decodeSnapshot(team.body, { version: room.ruleset, challenge: room.challenge, crewSize: room.crewSize });
-        if (!snapshot.ok) return [];
-        bodies.set(team.number, snapshot.body);
-        return [{ team, body: snapshot.body }];
-      });
-      body = bodies.get(myTeam) || body;
-      $("standings").replaceChildren(...decodedTeams.map(({ team, body: teamBody }) => {
+      $("race-status").textContent = view.phase.toUpperCase();
+      const teams = [...view.teams].sort((a, b) => (a.finishMs || Infinity) - (b.finishMs || Infinity));
+      $("standings").replaceChildren(...teams.map(team => {
         const element = document.createElement("div");
-        element.textContent = `TEAM ${team.number + 1} · ${team.finishMs ? formatTime(team.finishMs) : `${teamBody.stage}/${challengeFor(teamBody.challenge).stages.length} objectives`}`;
+        element.textContent = `TEAM ${team.number + 1} · ${team.finishMs ? formatTime(team.finishMs) : `${team.body.stage}/${challengeFor(team.body.challenge).stages.length} objectives`}`;
         return element;
       }));
-      if (room.state === "finished" && !body.finished && !finishShown) {
-        finishShown = true; toast("Race ended. No finish recorded for your team. Open the lobby for a rematch.");
-      }
     }
   }
 
@@ -548,19 +565,22 @@ document.querySelectorAll<HTMLElement>("[data-key]").forEach(element => {
 });
 
 setInterval(() => {
-  if (playing && !practice && ready && roomCode && conn?.db.room.id.find(roomCode)?.state === "racing") void conn.reducers.input(input()).catch(error => toast(String(error)));
+  const view = race.view(Date.now());
+  if (ready && view.canSendInput && conn) void conn.reducers.input(input()).catch(error => toast(String(error)));
 }, 50);
 
-function updateActionLabel() {
+function updateActionLabel(view = race.view(Date.now())) {
   const button = document.querySelector<HTMLButtonElement>(".touch .grab");
   if (!button) return;
-  const stage = challengeFor(selectedChallenge).stages[body.stage];
+  const { body, controlledRole: role } = view;
+  const stage = challengeFor(body.challenge).stages[body.stage];
   if (stage?.kind === "finalTiming") button.textContent = "SYNC";
-  else if (stage?.kind === "duck" && (selectedCrew === 3 ? role === 1 : role === 2)) button.textContent = "BEND";
-  else button.textContent = rolesFor(selectedCrew)[role]?.action ?? "ACT";
+  else if (stage?.kind === "duck" && (view.setup.crewSize === 3 ? role === 1 : role === 2)) button.textContent = "BEND";
+  else button.textContent = rolesFor(view.setup.crewSize)[role]?.action ?? "ACT";
 }
 
-function roleFeedback() {
+function roleFeedback(view: RaceSessionView) {
+  const { body, controlledRole: role } = view;
   const stage = challengeFor(body.challenge).stages[body.stage];
   if (!stage) return "Course complete";
   if (stage.kind === "finalTiming") return isFinalAligned(body.ticks) ? "ALIGN · every pilot ACT now" : "WAIT · watch the launch rings";
@@ -575,31 +595,21 @@ function roleFeedback() {
   return stage.kind === "switches" ? `${foot ? "RIGHT" : "LEFT"} SWITCH ${Math.round(body.feet[foot] * 100)}%` : `Drive the ${foot ? "right" : "left"} foot · match the other leg`;
 }
 
-let previous = performance.now(), accumulator = 0;
+let previous = performance.now();
 function frame(timestamp: number) {
-  const delta = Math.min((timestamp - previous) / 1000, 0.1); previous = timestamp; accumulator += delta;
-  if (playing && practice && !document.querySelector("dialog[open]")) {
-    while (accumulator >= 1 / 30) { step(body, practiceInputs(body, role, input())); accumulator -= 1 / 30; }
-  } else accumulator = 0;
-  if (playing) {
+  const delta = Math.min((timestamp - previous) / 1000, 0.1); previous = timestamp;
+  handleSignals(race.advance(delta, input(), !document.querySelector("dialog[open]")));
+  const view = race.view(Date.now());
+  const { body } = view;
+  if (view.playing) {
     const challenge = challengeFor(body.challenge), stage = challenge.stages[body.stage];
-    let milliseconds = elapsedMs(body);
-    if (!practice && conn && roomCode) {
-      const room = conn.db.room.id.find(roomCode);
-      if (room) {
-        const start = Number(room.startAt / 1000n), remaining = Math.ceil((start - Date.now()) / 1000);
-        $("countdown").textContent = room.state === "countdown" && remaining > 0 ? String(remaining) : "";
-        milliseconds = room.state === "countdown" ? 0 : Math.max(0, Date.now() - start) + body.penaltyMs;
-        const team = conn.db.team.id.find(`${roomCode}:${myTeam}`);
-        if (team?.finishMs) milliseconds = team.finishMs;
-      }
-    }
-    $("timer").textContent = formatTime(milliseconds);
+    $("countdown").textContent = view.countdownSeconds > 0 ? String(view.countdownSeconds) : "";
+    $("timer").textContent = formatTime(view.elapsedMs);
     $("objective-title").textContent = body.finished ? "MISSION COMPLETE" : `${body.stage + 1} / ${challenge.stages.length} · ${stage.name}`;
     $("objective-hint").textContent = stage?.hint ?? "Your crew made it home.";
     ($("objective-progress") as HTMLProgressElement).value = body.finished ? 1 : stageProgressValue(body);
     $("objective-panel").dataset.stage = String(body.stage);
-    $("role-feedback").textContent = roleFeedback();
+    $("role-feedback").textContent = roleFeedback(view);
     const aligned = stage?.kind === "finalTiming" && isFinalAligned(body.ticks);
     $("sync-signal").textContent = stage?.kind === "finalTiming" ? aligned ? "ALIGN · ACT" : "WAIT FOR ALIGN" : `${challenge.fallPenaltyMs / 1000}s FALL PENALTY`;
     $("sync-signal").classList.toggle("aligned", Boolean(aligned));
@@ -607,18 +617,11 @@ function frame(timestamp: number) {
       $("stage-" + index).classList.toggle("current", body.stage === index);
       $("stage-" + index).classList.toggle("complete", body.stage > index);
     });
-    updateActionLabel();
-    if (body.stage > lastStage) { lastStage = body.stage; beep(650); toast(challenge.stages[body.stage]?.hint ?? `All ${challenge.stages.length} objectives cleared!`); }
-    if (body.falls > lastFalls) { lastFalls = body.falls; beep(180); toast(`Back to your checkpoint. +${challenge.fallPenaltyMs / 1000} second fall penalty.`); }
-    if (body.mistakes > lastMistakes) { lastMistakes = body.mistakes; beep(130); toast(`Missed launch window. +${challenge.timingPenaltyMs / 1000} seconds. Reset and resync.`); }
-    if (body.finished && !finishShown) {
-      finishShown = true; $("finish-time").textContent = formatTime(milliseconds);
-      $("finish-label").textContent = practice ? "PRACTICE COMPLETE / UNRANKED" : "VERIFIED TEAM FINISH";
-      $("finish-detail").textContent = `${challenge.difficulty} · ${selectedCrew} pilots · ${body.falls} falls · ${body.mistakes} timing mistakes · ${(body.penaltyMs / 1000).toFixed(0)}s total penalties. ${practice ? "Bring your crew and turn coordination into competition." : "Saved to the matching persistent leaderboard."}`;
-      modal("finish-dialog");
-    }
+    updateActionLabel(view);
   }
-  scene.update(bodies, myTeam, timestamp / 1000);
+  renderBodies.clear();
+  for (const team of view.teams) renderBodies.set(team.number, team.body);
+  scene.update(renderBodies, view.room?.team ?? 0, timestamp / 1000);
   requestAnimationFrame(frame);
 }
 

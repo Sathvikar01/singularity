@@ -23,7 +23,7 @@ export type RankedProjectionSource<TIdentity> = {
   identity?: TIdentity;
   db: {
     player: { iter(): Iterable<PlayerRow<TIdentity>> };
-    room: { id: { find(code: string): RoomRow<TIdentity> | undefined } };
+    room: { id: { find(code: string): RoomRow<TIdentity> | null | undefined } };
     team: { iter(): Iterable<TeamRow> };
   };
 };
