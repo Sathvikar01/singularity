@@ -16,4 +16,6 @@ export default {
   teamNumber: __t.u32(),
   role: __t.u32(),
   ruleset: __t.u32(),
+  challenge: __t.u32(),
+  crewSize: __t.u32(),
 };

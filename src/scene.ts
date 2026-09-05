@@ -1,314 +1,361 @@
 import * as THREE from "three";
-import { type Body, LINKS, COURSE, beacon, scanError, sweepX } from "../shared/physics";
-const COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
+import {
+  CHALLENGE,
+  CHALLENGES,
+  challengeFor,
+  finalAlignment,
+  hazardX,
+  platformCenter,
+  type Body,
+  type ChallengeId,
+} from "../shared/physics";
+import { createCharacter, type CharacterRig } from "./character";
+
+const TEAM_COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
+const THEMES = [
+  { background: 0x12212b, fog: 0x12212b, floor: 0xcedbd5, dark: 0x273b45, accent: 0x96e9cd, hazard: 0xff806e },
+  { background: 0x071f2b, fog: 0x0c3543, floor: 0x6d91a1, dark: 0x163642, accent: 0x69d9ff, hazard: 0xffb45f },
+  { background: 0x210f1b, fog: 0x321523, floor: 0x6e4754, dark: 0x2c1b2b, accent: 0xff9b73, hazard: 0xe84c72 },
+] as const;
+
+type MovingPlatform = { mesh: THREE.Mesh; z: number };
+type CourseRig = {
+  group: THREE.Group;
+  barriers: THREE.Mesh[];
+  hazards: THREE.Mesh[];
+  movingPlatforms: MovingPlatform[];
+  relays: THREE.Mesh[];
+  footPads: THREE.Mesh[];
+  finalRing?: THREE.Group;
+};
+
 export function createScene(container: HTMLElement) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#12212b");
-  scene.fog = new THREE.FogExp2("#12212b", 0.012);
+  scene.background = new THREE.Color(THEMES[0].background);
+  scene.fog = new THREE.FogExp2(THEMES[0].fog, 0.012);
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.25;
+  renderer.toneMappingExposure = 1.23;
   container.append(renderer.domElement);
-  const camera = new THREE.PerspectiveCamera(43, 1, 0.1, 200);
+
+  const camera = new THREE.PerspectiveCamera(43, 1, 0.1, 220);
   camera.position.set(14, 14, -19);
-  scene.add(new THREE.HemisphereLight(0xd7f8ff, 0x344556, 2.6));
+  const hemisphere = new THREE.HemisphereLight(0xd7f8ff, 0x344556, 2.7);
+  scene.add(hemisphere);
   const sun = new THREE.DirectionalLight(0xffead6, 3.4);
   sun.position.set(-15, 28, 10);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, {
-    left: -30,
-    right: 30,
-    top: 60,
-    bottom: -30,
-    far: 100,
-  });
+  Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 90, bottom: -30, far: 140 });
   sun.shadow.bias = -0.0005;
   scene.add(sun);
-  const mint = new THREE.PointLight(0x93ffdc, 35, 30);
-  mint.position.set(0, 7, 5);
-  scene.add(mint);
-  const mat = (color: number, metalness = 0.05, roughness = 0.6) =>
+  const courseLight = new THREE.PointLight(0x93ffdc, 42, 42);
+  courseLight.position.set(0, 8, 7);
+  scene.add(courseLight);
+
+  const material = (color: number, metalness = 0.05, roughness = 0.6) =>
     new THREE.MeshStandardMaterial({ color, metalness, roughness });
-  const dark = mat(0x273b45),
-    floor = mat(0xcedbd5),
-    coral = mat(0xff806e),
-    accent = mat(0x96e9cd);
-  function box(
-    w: number,
-    h: number,
-    d: number,
+  const makeBox = (
+    group: THREE.Group,
+    width: number,
+    height: number,
+    depth: number,
     x: number,
     y: number,
     z: number,
-    m: THREE.Material,
-  ) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    meshMaterial: THREE.Material,
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), meshMaterial);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    scene.add(mesh);
+    group.add(mesh);
     return mesh;
-  }
-  function label(
+  };
+  const makeLabel = (
+    group: THREE.Group,
     text: string,
     x: number,
     y: number,
     z: number,
-    color = "#a4edda",
-    scale = 3,
-  ) {
+    color: string,
+    scale = 4,
+  ) => {
     const canvas = document.createElement("canvas");
-    canvas.width = 512;
+    canvas.width = 768;
     canvas.height = 128;
-    const c = canvas.getContext("2d")!;
-    c.fillStyle = color;
-    c.font = "700 48px sans-serif";
-    c.textAlign = "center";
-    c.fillText(text, 256, 75, 480);
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: new THREE.CanvasTexture(canvas),
-        depthWrite: false,
-      }),
-    );
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = color;
+    context.font = "700 46px Arial, sans-serif";
+    context.textAlign = "center";
+    context.fillText(text.toUpperCase(), 384, 75, 720);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthWrite: false }));
     sprite.position.set(x, y, z);
-    sprite.scale.set(scale, scale / 4, 1);
-    scene.add(sprite);
+    sprite.scale.set(scale, scale / 6, 1);
+    group.add(sprite);
     return sprite;
-  }
-  // Suspended industrial islands, a narrow balance bridge, delivery bay and sweepers.
-  for (const [z, d] of [
-    [1, 12],
-    [21, 12],
-    [46, 38],
-  ]) {
-    box(9.2, 0.7, d, 0, -0.4, z, floor);
-    box(9.6, 0.2, d + 0.3, 0, -0.85, z, dark);
-    for (const x of [-4.4, 4.4]) {
-      box(0.09, 0.03, d - 0.4, x, 0.015, z, accent);
-      for (let k = z - d / 2 + 1; k < z + d / 2; k += 2)
-        box(0.2, 0.025, 0.5, x, 0.03, k, coral);
+  };
+
+  function addGate(group: THREE.Group, z: number, finish: boolean, palette: typeof THEMES[number]) {
+    const dark = material(palette.dark, 0.3, 0.52);
+    const accent = material(palette.accent, 0.25, 0.35);
+    for (const x of [-4, 4]) {
+      makeBox(group, 0.3, 6, 0.3, x, 3, z, dark);
+      makeBox(group, 0.08, 5.4, 0.34, x, 3, z - 0.01, accent);
     }
-    for (const x of [-3.5, 3.5]) box(0.6, 2, 0.6, x, -1.7, z, dark);
+    makeBox(group, 8.3, 0.52, 0.42, 0, 6, z, dark);
+    makeLabel(group, finish ? "finish" : "checkpoint", 0, 5.7, z - 0.26, `#${palette.accent.toString(16).padStart(6, "0")}`, 3.4);
   }
-  box(2.6, 0.4, 8, 0, -0.2, 11, dark);
-  for (let z = 7; z < 15; z += 0.8) box(2.5, 0.04, 0.06, 0, 0.03, z, accent);
-  for (const z of [0, 16, 28, 35, 49, 60]) {
-    for (let x = -4; x < 4; x += 0.55)
-      box(0.28, 0.025, 0.4, x, 0.03, z, z === 60 ? dark : accent);
+
+  function addStageLabels(group: THREE.Group, challenge: ChallengeId, color: string) {
+    challengeFor(challenge).stages.forEach((stage, index) => {
+      const previous = challengeFor(challenge).stages[index - 1];
+      const z = index === 0 ? Math.max(2, stage.gate - 3) : Math.max(previous.gate + 2, stage.gate - 4);
+      makeLabel(group, `${String(index + 1).padStart(2, "0")} / ${stage.name}`, 0, 4.9, z, color, 5.5);
+    });
   }
-  for (const [z, title] of [
-    [3, "01  /  FIRST CONTACT"],
-    [10, "02  /  HOLD THE LINE"],
-    [21, "03  /  SPECIAL DELIVERY"],
-    [31, "04  /  TWO TO TANGO"],
-    [41, "05  /  STORM WATCH"],
-    [56, "06  /  HOME STRETCH"],
-  ] as const) {
-    label(title, 0, 4.6, z, "#c5f8e9", 5.5);
+
+  function addBarriers(group: THREE.Group, challenge: ChallengeId, palette: typeof THEMES[number]) {
+    return challengeFor(challenge).stages.slice(0, -1).map(stage => {
+      const barrierMaterial = new THREE.MeshBasicMaterial({ color: palette.accent, transparent: true, opacity: 0.2, depthWrite: false });
+      return makeBox(group, 9.4, 3.4, 0.06, 0, 1.7, stage.gate, barrierMaterial);
+    });
   }
-  box(4, 0.05, 3, 0, 0.04, 25.5, accent);
-  label("CARGO DROP", 0, 0.7, 26, "#ffffff", 2.8);
-  for (const x of [-3.8, 3.8]) {
-    box(0.3, 6, 0.3, x, 3, 60, dark);
-    box(0.1, 5.5, 0.34, x, 3, 59.98, accent);
-  }
-  box(8, 0.6, 0.5, 0, 6, 60, dark);
-  label("FINISH", 0, 6, 59.6, "#b7ffe2", 4);
-  const sweeper = box(0.6, 1.1, 7, 0, 1.1, 42.5, coral);
-  box(9, 0.16, 0.3, 0, 0.1, 42.5, dark);
-  const barriers = COURSE.slice(0, -1).map(c => {
-    const material = new THREE.MeshBasicMaterial({ color: 0xffcc70, transparent: true, opacity: .24, depthWrite: false });
-    const barrier = box(9.2, 3.2, .07, 0, 1.6, c.gate, material);
-    return barrier;
-  });
-  const beaconMesh = box(.5, .5, .5, 3, 3, 7, new THREE.MeshBasicMaterial({ color: 0xffcc70 }));
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(.025, .055, 1, 8), new THREE.MeshBasicMaterial({ color: 0xffcc70, transparent: true, opacity: .75 }));
-  scene.add(beam);
-  const footPads = [-.45, .45].map((x, i) => {
-    label(i === 0 ? "L" : "R", x, .8, 33, "#b7ffe2", .6);
-    const pad = box(.85, .06, 2.5, x, .05, 33, mat(0x385c62));
-    return pad;
-  });
-  label("BRACE", 0, .65, 15.5, "#b7ffe2", 2);
-  for (let i = 0; i < 70; i++) {
-    const angle = i * 2.399;
-    const radius = 20 + (i % 9) * 3;
-    const rock = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.3 + (i % 5) * 0.24, 0),
-      dark,
-    );
-    rock.position.set(
-      Math.cos(angle) * radius,
-      -3 - (i % 7) * 1.5,
-      Math.sin(angle) * radius + 20,
-    );
-    rock.rotation.set(i, i * 0.3, 0);
-    scene.add(rock);
-  }
-  const starGeo = new THREE.BufferGeometry();
-  const points = [];
-  for (let i = 0; i < 300; i++)
-    points.push(
-      Math.sin(i * 12.989) * 90,
-      10 + (i % 30),
-      Math.cos(i * 7.23) * 90,
-    );
-  starGeo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-  const stars = new THREE.Points(
-      starGeo,
-      new THREE.PointsMaterial({
-        color: 0x8ca9b8,
-        size: 0.065,
-        transparent: true,
-        opacity: 0.65,
-      }),
-  );
-  scene.add(stars);
-  const robots = new Map<
-    number,
-    {
-      nodes: THREE.Mesh[];
-      links: THREE.Mesh[];
-      cube: THREE.Mesh;
-      eyes: THREE.Group;
-      ring: THREE.Mesh;
+
+  function addSpaceDebris(group: THREE.Group, dark: THREE.Material, length: number, seed = 0) {
+    for (let index = 0; index < 76; index++) {
+      const angle = index * 2.399 + seed;
+      const radius = 20 + (index % 9) * 3;
+      const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3 + (index % 5) * 0.24, 0), dark);
+      rock.position.set(Math.cos(angle) * radius, -3 - (index % 7) * 1.5, Math.sin(angle) * radius + length / 2);
+      rock.rotation.set(index, index * 0.3, 0);
+      group.add(rock);
     }
-  >();
+  }
+
+  function buildEasy(): CourseRig {
+    const challenge = CHALLENGE.Easy;
+    const palette = THEMES[challenge];
+    const group = new THREE.Group();
+    const floor = material(palette.floor), dark = material(palette.dark, 0.22, 0.48);
+    const accent = material(palette.accent, 0.18, 0.4), hazard = material(palette.hazard, 0.08, 0.55);
+    for (const [z, depth] of [[1, 12], [21, 12], [46, 38]] as const) {
+      makeBox(group, 9.2, 0.7, depth, 0, -0.4, z, floor);
+      makeBox(group, 9.6, 0.2, depth + 0.3, 0, -0.85, z, dark);
+      for (const x of [-4.4, 4.4]) makeBox(group, 0.09, 0.04, depth - 0.4, x, 0.015, z, accent);
+    }
+    makeBox(group, 2.6, 0.4, 8, 0, -0.2, 11, dark);
+    for (let z = 7; z < 15; z += 0.8) makeBox(group, 2.5, 0.04, 0.06, 0, 0.03, z, accent);
+    const pad = makeBox(group, 4, 0.08, 3, 0, 0.04, 25.7, accent);
+    makeLabel(group, "cargo drop", 0, 0.7, 26, "#ffffff", 2.8);
+    const relays = [5, 47].flatMap(z => [-0.9, 0.9].map(x => makeBox(group, 0.45, 0.45, 0.45, x, 2.05, z, material(0xffcc70, 0.3, 0.28))));
+    const footPads = [-0.45, 0.45].map((x, index) => {
+      makeLabel(group, index ? "R" : "L", x, 0.8, 33, "#b7ffe2", 0.7);
+      return makeBox(group, 0.85, 0.06, 2.5, x, 0.05, 33, material(0x385c62));
+    });
+    const sweeper = makeBox(group, 0.62, 1.1, 7, 0, 1.1, 42.5, hazard);
+    makeBox(group, 9, 0.16, 0.3, 0, 0.1, 42.5, dark);
+    addGate(group, 60, true, palette);
+    addStageLabels(group, challenge, "#c5f8e9");
+    addSpaceDebris(group, dark, 65);
+    group.userData.deliveryPad = pad;
+    scene.add(group);
+    return { group, barriers: addBarriers(group, challenge, palette), hazards: [sweeper], movingPlatforms: [], relays, footPads };
+  }
+
+  function buildMedium(): CourseRig {
+    const challenge = CHALLENGE.Medium;
+    const palette = THEMES[challenge];
+    const group = new THREE.Group();
+    const floor = material(palette.floor, 0.34, 0.5), dark = material(palette.dark, 0.5, 0.38);
+    const accent = material(palette.accent, 0.3, 0.3), hazard = material(palette.hazard, 0.25, 0.4);
+    for (const [z, depth, width] of [[13.5, 37, 9.6], [41.5, 15, 4.3], [72.5, 13, 9.6], [99, 18, 9.6]] as const) {
+      makeBox(group, width, 0.68, depth, 0, -0.42, z, floor);
+      makeBox(group, width + 0.35, 0.18, depth + 0.2, 0, -0.85, z, dark);
+    }
+    for (let z = 50.7; z < 66; z += 1.7) {
+      const x = Math.sin(z * 0.72) * 0.72;
+      makeBox(group, 2.3, 0.52, 1.55, x, -0.28, z, floor);
+      makeBox(group, 2.45, 0.12, 1.65, x, -0.62, z, accent);
+    }
+    for (let z = 11; z <= 20; z += 2.3) {
+      makeBox(group, 8.8, 0.22, 0.22, 0, 2.72, z, hazard);
+      for (const x of [-4.1, 4.1]) makeBox(group, 0.2, 2.72, 0.2, x, 1.36, z, dark);
+    }
+    makeLabel(group, "bend under blue", 0, 2.45, 15.5, "#d6f7ff", 3.2);
+    const hazards = [
+      makeBox(group, 0.65, 1.15, 4.2, 0, 1.1, 41, hazard),
+      makeBox(group, 0.65, 1.15, 3.2, 0, 1.1, 58, hazard),
+    ];
+    const movingPlatforms: MovingPlatform[] = [];
+    for (const z of [82, 85.5, 89]) {
+      const mesh = makeBox(group, 3.35, 0.55, 3, 0, -0.28, z, floor);
+      makeBox(group, 9.2, 0.12, 0.18, 0, -0.7, z, dark);
+      movingPlatforms.push({ mesh, z });
+    }
+    const pad = makeBox(group, 3, 0.08, 2.6, 0, 0.04, 76.2, accent);
+    makeLabel(group, "power cell dock", 0, 0.72, 76.2, "#e4fbff", 3);
+    addGate(group, 104, true, palette);
+    addStageLabels(group, challenge, "#ccefff");
+    addSpaceDebris(group, dark, 109, 1.3);
+    group.userData.deliveryPad = pad;
+    scene.add(group);
+    return { group, barriers: addBarriers(group, challenge, palette), hazards, movingPlatforms, relays: [], footPads: [] };
+  }
+
+  function buildDifficult(): CourseRig {
+    const challenge = CHALLENGE.Difficult;
+    const palette = THEMES[challenge];
+    const group = new THREE.Group();
+    const floor = material(palette.floor, 0.42, 0.43), dark = material(palette.dark, 0.56, 0.34);
+    const accent = material(palette.accent, 0.4, 0.3), hazard = material(palette.hazard, 0.3, 0.38);
+    for (const [z, depth, y] of [[2, 14, -0.4], [40.5, 11, -0.05], [68, 11, -0.4], [77, 7, -0.4], [89, 13, -0.4], [103, 18, -0.4]] as const) {
+      makeBox(group, 9.4, 0.7, depth, 0, y, z, floor);
+      makeBox(group, 9.7, 0.16, depth + 0.2, 0, y - 0.44, z, dark);
+    }
+    makeBox(group, 8.6, 5.7, 0.48, 0, 2.45, 8.4, dark);
+    const relays = [-0.9, 0.9].map(x => {
+      const relay = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.08, 10, 28), accent);
+      relay.position.set(x, 2.05, 8.05);
+      group.add(relay);
+      return relay;
+    });
+    for (let index = 0; index < 4; index++) {
+      const z = 10.5 + index * 3;
+      const height = 0.48 * (index + 1);
+      makeBox(group, 4.4, height, 2.85, index % 2 ? 0.15 : -0.15, height / 2 - 0.02, z, index % 2 ? accent : floor);
+    }
+    const movingPlatforms: MovingPlatform[] = [];
+    for (const z of [23, 27, 31.5, 48, 52.5, 57, 61]) {
+      const y = z < 35 ? 1.64 : 0.08;
+      const mesh = makeBox(group, 3.05, 0.55, 3.5, 0, y, z, floor);
+      const frame = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: palette.accent }));
+      mesh.add(frame);
+      movingPlatforms.push({ mesh, z });
+    }
+    const hazards = [
+      makeBox(group, 0.7, 1.4, 3, 0, 3.1, 29, hazard),
+      makeBox(group, 0.7, 1.25, 3, 0, 1.25, 54, hazard),
+    ];
+    for (const [x, z, title] of [[-1.55, 70.5, "CORE A"], [1.55, 92.2, "CORE B"]] as const) {
+      const socket = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.12, 12, 32), accent);
+      socket.rotation.x = Math.PI / 2;
+      socket.position.set(x, 0.12, z);
+      socket.castShadow = true;
+      group.add(socket);
+      makeLabel(group, title, x, 1.08, z, "#ffd6c4", 1.5);
+    }
+    const finalRing = new THREE.Group();
+    for (let index = 0; index < 3; index++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(1.45 + index * 0.5, 0.06 + index * 0.015, 10, 64),
+        new THREE.MeshStandardMaterial({ color: index === 1 ? palette.hazard : palette.accent, emissive: index === 1 ? palette.hazard : palette.accent, emissiveIntensity: 0.8 }),
+      );
+      ring.rotation.y = index * 0.75;
+      finalRing.add(ring);
+    }
+    finalRing.position.set(0, 2.4, 108);
+    group.add(finalRing);
+    makeLabel(group, "wait for align", 0, 5.35, 105.5, "#ffd6c4", 4.2);
+    addStageLabels(group, challenge, "#ffd3c0");
+    addSpaceDebris(group, dark, 113, 2.5);
+    scene.add(group);
+    return { group, barriers: addBarriers(group, challenge, palette), hazards, movingPlatforms, relays, footPads: [], finalRing };
+  }
+
+  const courses = [buildEasy(), buildMedium(), buildDifficult()] as const;
+  const starGeometry = new THREE.BufferGeometry();
+  const points: number[] = [];
+  for (let index = 0; index < 420; index++) points.push(Math.sin(index * 12.989) * 100, 8 + (index % 36), Math.cos(index * 7.23) * 100 + 38);
+  starGeometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+  scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: 0x9fc8d5, size: 0.065, transparent: true, opacity: 0.65 })));
+
+  const robots = new Map<number, CharacterRig>();
   function robot(id: number) {
-    const material = mat(COLORS[id % 4], 0.2, 0.37);
-    const joints = mat(0x293c49, 0.3, 0.4);
-    const nodes = Array.from({ length: 6 }, (_, i) => {
-      const geometry =
-        i === 0
-          ? new THREE.CapsuleGeometry(0.43, 0.55, 6, 12)
-          : i === 1
-            ? new THREE.SphereGeometry(0.47, 20, 16)
-            : new THREE.SphereGeometry(i >= 4 ? 0.3 : 0.27, 14, 12);
-      const m = new THREE.Mesh(
-        geometry,
-        i === 0 || i === 1 ? material : joints,
-      );
-      scene.add(m);
-      m.castShadow = true;
-      return m;
-    });
-    const links = LINKS.slice(0, 5).map(() => {
-      const m = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.14, 0.18, 1, 12),
-        material,
-      );
-      m.castShadow = true;
-      scene.add(m);
-      return m;
-    });
-    const eyes = new THREE.Group();
-    for (const x of [-0.17, 0.17]) {
-      const eye = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 12, 12),
-        new THREE.MeshBasicMaterial({ color: 0xeefff5 }),
-      );
-      eye.position.set(x, 0.05, 0.4);
-      eyes.add(eye);
-      const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(0.056, 10, 10),
-        joints,
-      );
-      pupil.position.set(x, 0.05, 0.505);
-      eyes.add(pupil);
-    }
-    scene.add(eyes);
-    const cube = box(0.9, 0.9, 0.9, 0, 0.5, 18, mat(0xffcc70, 0.25, 0.35));
-    const frame = new THREE.LineSegments(
-      new THREE.EdgesGeometry(cube.geometry),
-      new THREE.LineBasicMaterial({ color: 0xfff3c4 }),
-    );
-    cube.add(frame);
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.8, 0.85, 48),
-      new THREE.MeshBasicMaterial({
-        color: COLORS[id % 4],
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.7,
-      }),
-    );
-    ring.rotation.x = -Math.PI / 2;
-    scene.add(ring);
-    const r = { nodes, links, cube, eyes, ring };
-    robots.set(id, r);
-    return r;
+    const rig = createCharacter(id, TEAM_COLORS[id % TEAM_COLORS.length]);
+    scene.add(rig.root);
+    robots.set(id, rig);
+    return rig;
   }
-  const v = new THREE.Vector3(),
-    up = new THREE.Vector3(0, 1, 0),
-    look = new THREE.Vector3(0, 1, 6);
+
+  const vector = new THREE.Vector3();
+  const look = new THREE.Vector3(0, 1, 6);
   let follow = false;
+  let activeChallenge: ChallengeId = CHALLENGE.Easy;
+
+  function showChallenge(challenge: number) {
+    const next = challenge === 1 || challenge === 2 ? challenge : CHALLENGE.Easy;
+    activeChallenge = next;
+    courses.forEach((course, index) => { course.group.visible = index === next; });
+    const theme = THEMES[next];
+    (scene.background as THREE.Color).setHex(theme.background);
+    (scene.fog as THREE.FogExp2).color.setHex(theme.fog);
+    courseLight.color.setHex(theme.accent);
+    hemisphere.color.setHex(next === CHALLENGE.Difficult ? 0xffc2b0 : next === CHALLENGE.Medium ? 0xc9f7ff : 0xd7f8ff);
+  }
+  showChallenge(activeChallenge);
+
   function update(bodies: Map<number, Body>, selected: number, time: number) {
-      for (const [id, r] of robots) {
-        const visible = bodies.has(id);
-        [...r.nodes, ...r.links, r.cube, r.eyes, r.ring].forEach((o) => (o.visible = visible));
-      }
-      for (const [id, b] of bodies) {
-        const r = robots.get(id) || robot(id);
-        b.nodes.forEach((p, i) => r.nodes[i].position.lerp(v.set(p.x, p.y, p.z), 0.5));
-        r.links.forEach((m, i) => {
-          const [a, c] = LINKS[i], p = r.nodes[a].position, q = r.nodes[c].position;
-          m.position.copy(p).add(q).multiplyScalar(0.5);
-          v.copy(q).sub(p);
-          m.scale.y = v.length();
-          m.quaternion.setFromUnitVectors(up, v.normalize());
-        });
-        r.eyes.position.copy(r.nodes[1].position);
-        r.eyes.rotation.y = b.look + (follow ? 0 : Math.PI);
-        r.cube.position.lerp(v.set(b.cube.x, b.cube.y, b.cube.z), 0.5);
-        r.cube.rotation.y = time * 0.2;
-        r.ring.position.set(b.nodes[0].x, 0.06, b.nodes[0].z);
-        r.ring.scale.setScalar(b.brace ? 1.5 : 1);
-        r.cube.visible = !b.delivered;
-      }
-    const b = bodies.get(selected);
-    if (b && follow) {
-      const p = b.nodes[0];
-      camera.position.lerp(v.set(p.x + 10, 10, p.z - 15), 0.035);
-      look.lerp(v.set(p.x, 1, p.z + 5), 0.04);
+    for (const [id, rig] of robots) rig.setVisible(bodies.has(id));
+    for (const [id, body] of bodies) (robots.get(id) || robot(id)).update(body, time, !follow);
+    const body = bodies.get(selected);
+    if (body && body.challenge !== activeChallenge) showChallenge(body.challenge);
+    const course = courses[activeChallenge];
+    const ticks = body?.ticks ?? Math.round(time * 30);
+    course.hazards.forEach((mesh, index) => { mesh.position.x = hazardX(activeChallenge, index, ticks); });
+    course.movingPlatforms.forEach(({ mesh, z }) => { mesh.position.x = platformCenter(activeChallenge, z, ticks); });
+    course.barriers.forEach((mesh, index) => { mesh.visible = !body || body.stage <= index; });
+    course.relays.forEach((relay, index) => {
+      relay.rotation.y = time * (index % 2 ? -1 : 1);
+      const material = relay.material as THREE.MeshStandardMaterial;
+      material.emissive?.setHex(body && body.charge > 0 ? THEMES[activeChallenge].accent : 0x4b2e19);
+      material.emissiveIntensity = body ? 0.25 + body.charge : 0.25;
+    });
+    course.footPads.forEach((mesh, index) => {
+      (mesh.material as THREE.MeshStandardMaterial).color.setHex(body && (body.stage > 3 || body.feet[index] > 0) ? 0x91dfc5 : 0x385c62);
+    });
+    if (course.finalRing) {
+      const alignment = finalAlignment(ticks);
+      course.finalRing.rotation.z = time * 0.55;
+      course.finalRing.children.forEach((child, index) => {
+        child.rotation.y = time * (index % 2 ? -1.1 : 0.8) + index;
+        const ringMaterial = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        ringMaterial.emissiveIntensity = Math.abs(alignment) > 0.94 ? 2.2 : 0.45;
+      });
+      course.finalRing.scale.setScalar(1 + Math.max(0, Math.abs(alignment) - 0.8) * 0.25);
+    }
+
+    if (body && follow) {
+      const torso = body.nodes[0];
+      camera.position.lerp(vector.set(torso.x + 10, torso.y + 8.5, torso.z - 15), 0.035);
+      look.lerp(vector.set(torso.x, torso.y * 0.35 + 0.7, torso.z + 5), 0.04);
     } else {
-      camera.position.lerp(v.set(14, 14, -19), 0.025);
-      look.lerp(v.set(0, 1, 8), 0.03);
+      const previewZ = activeChallenge === CHALLENGE.Difficult ? -17 : -19;
+      camera.position.lerp(vector.set(14, 14, previewZ), 0.025);
+      look.lerp(vector.set(0, 1.2, 8), 0.03);
     }
     camera.lookAt(look);
-    const sweeperX = b ? sweepX(b.ticks) : Math.sin(time * 1.8) * 3.6;
-    sweeper.position.x = sweeperX;
-    barriers.forEach((m, i) => { m.visible = !b || b.stage <= i; });
-    if (b) {
-      const target = beacon(b), head = b.nodes[1];
-      beaconMesh.position.set(target.x, head.y, target.z);
-      beaconMesh.rotation.y = time;
-      beaconMesh.visible = b.stage === 0 || b.stage === 4;
-      beam.visible = follow && beaconMesh.visible;
-      const length = 5;
-      beam.position.set(head.x + Math.sin(b.look) * length / 2, head.y, head.z + Math.cos(b.look) * length / 2);
-      beam.scale.y = length;
-      beam.quaternion.setFromUnitVectors(up, v.set(Math.sin(b.look), 0, Math.cos(b.look)));
-      (beam.material as THREE.MeshBasicMaterial).color.setHex(Math.abs(scanError(b)) < .18 ? 0x91dfc5 : 0xffcc70);
-      footPads.forEach((m, i) => (m.material as THREE.MeshStandardMaterial).color.setHex(b.stage > 3 || b.feet[i] > 0 ? 0x91dfc5 : 0x385c62));
-    }
     renderer.render(scene, camera);
   }
+
   const resize = () => {
-    const w = container.clientWidth,
-      h = container.clientHeight;
-    renderer.setSize(w, h);
-    camera.aspect = w / h;
+    const width = container.clientWidth, height = container.clientHeight;
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
     camera.updateProjectionMatrix();
   };
   window.addEventListener("resize", resize);
   resize();
+
   return {
     update,
-    setFollow: (f: boolean) => (follow = f),
+    setFollow(value: boolean) { follow = value; },
+    setChallenge(value: number) { showChallenge(value); },
+    getChallenge() { return CHALLENGES[activeChallenge]; },
   };
 }

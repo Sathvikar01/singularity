@@ -1,106 +1,304 @@
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
+
+const server = process.env.SPACETIMEDB_URI || "http://127.0.0.1:3101";
+const database = process.env.SPACETIMEDB_DATABASE || "singularity-coordination-test-v3";
+const localHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+if (
+  !localHosts.has(new URL(server).hostname) ||
+  !/^singularity-coordination-test-v3(?:-|$)/.test(database)
+) {
+  throw new Error("Refusing to run mutating multiplayer tests outside an isolated local test database.");
+}
+
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage();
   await page.routeWebSocket(url => url.port === "5173", socket => socket.close());
   await page.goto(process.env.TEST_URL || "http://127.0.0.1:5173");
-  const report = await page.evaluate(async () => {
+
+  const report = await page.evaluate(async ({ server, database }) => {
     const { DbConnection } = await import("/src/module_bindings/index.ts");
-    const { teammateInputs, RULESET, ROLES } = await import("/shared/physics.ts");
-    const clients = [], tokens = [];
-    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const check = (ok, message) => { if (!ok) throw Error(message); };
-    const reject = async (fn, message) => { let failed = false; try { await fn(); } catch { failed = true; } check(failed, message); };
-    const open = token => new Promise((resolve, reject) => {
-      DbConnection.builder().withUri("http://127.0.0.1:3100").withDatabaseName("singularity-five-role-test")
-        .withToken(token).onConnect((c, _, t) => {
-          tokens.push(t);
-          c.subscriptionBuilder().onApplied(() => resolve(c)).subscribeToAllTables();
-        }).onConnectError((_, e) => reject(e)).build();
-    });
-    const code = "QA" + Date.now().toString().slice(-8);
-    const args = i => ({ code, name: "Pilot " + i, teamNumber: Math.floor(i / 5), role: i % 5, ruleset: RULESET });
-    let timer;
-    try {
-      for (let i = 0; i < 20; i++) clients.push(await open());
-      await reject(() => clients[0].reducers.join({ ...args(0), role: 5 }), "sixth role accepted");
-      await reject(() => clients[0].reducers.join({ ...args(0), ruleset: 1 }), "old protocol accepted");
-      await clients[0].reducers.join(args(0));
-      await reject(() => clients[0].reducers.start({}), "incomplete crew started");
-      await reject(() => clients[1].reducers.join(args(0)), "duplicate role accepted");
-      for (let i = 1; i < 20; i++) await clients[i].reducers.join(args(i));
-      await reject(() => clients[1].reducers.start({}), "non-host started");
-      await clients[0].reducers.start({});
-      await reject(() => clients[0].reducers.join({ ...args(0), role: 1 }), "countdown role switch accepted");
-      await reject(() => clients[0].reducers.join({ ...args(0), code: code + "X" }), "room hop accepted");
-      await clients[4].reducers.leave({});
-      await reject(() => clients[4].reducers.join({ ...args(4), role: 0 }), "leave/rejoin switched role");
-      await clients[4].reducers.join(args(4));
-      const observer = await open(); clients.push(observer);
-      await reject(() => observer.reducers.join({ ...args(0), teamNumber: 0 }), "late join accepted");
-      await wait(3300);
-      await reject(() => clients[0].reducers.join({ ...args(0), role: 1 }), "racing role switch accepted");
-      await reject(() => clients[0].reducers.input({ x: NaN, z: 0, action: false }), "NaN input accepted");
-      // Host disconnect migrates authority but retains its role lease.
-      const hostToken = tokens[0];
-      clients[0].disconnect();
-      await wait(250);
-      check(!clients[1].db.room.id.find(code).host.isEqual(clients[0].identity), "host did not migrate");
-      check([...clients[1].db.player.iter()].find(p => p.room === code && p.team === 0 && p.role === 0)?.online === false, "lease lost");
-      clients[0] = await open(hostToken);
-      await reject(() => clients[0].reducers.join({ ...args(0), role: 1 }), "disconnect changed assignment");
-      await clients[0].reducers.join(args(0));
-      // Inputs decay after 500ms; action stops influencing authoritative body.
-      await clients[2].reducers.input({ x: 99, z: -99, action: true });
-      await wait(100);
-      const bounded = clients[2].db.player.id.find(clients[2].identity);
-      check(bounded.x === 1 && bounded.z === -1, "input not bounded");
-      await wait(650);
-      check(JSON.parse(clients[1].db.team.id.find(code + ":0").body).brace === false, "stale action persisted");
-      const started = Date.now();
-      let pending = false;
-      timer = setInterval(async () => {
-        if (pending) return;
-        pending = true;
-        try {
-          const packets = [];
-          for (let i = 0; i < 20; i++) {
-            const tm = clients[i].db.team.id.find(code + ":" + Math.floor(i / 5));
-            if (!tm || tm.finishMs) continue;
-            const b = JSON.parse(tm.body);
-            const u = teammateInputs(b)[i % 5];
-            if (i >= 15 && Date.now() - started < 1500) Object.assign(u, { x: 0, z: 0, action: false });
-            packets.push(clients[i].reducers.input(u));
-          }
-          await Promise.all(packets);
-        } finally { pending = false; }
-      }, 50);
-      const deadline = Date.now() + 90000;
-      while (Date.now() < deadline) {
-        await wait(200);
-        if ([...observer.db.result.iter()].filter(r => r.room === code).length === 4) break;
+    const { CHALLENGE, RULESET, rolesFor, teammateInputs } = await import("/shared/physics.ts");
+    const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const check = (ok, message) => { if (!ok) throw new Error(message); };
+    const reject = async (operation, message) => {
+      try {
+        await operation();
+      } catch {
+        return;
       }
-      clearInterval(timer);
-      const results = [...observer.db.result.iter()].filter(r => r.room === code).sort((a,b) => a.timeMs-b.timeMs);
-      check(results.length === 4, "not all four crews finished: " + JSON.stringify([...observer.db.team.iter()].filter(t=>t.room===code).map(t=>JSON.parse(t.body))));
-      check(results.every(r => r.ruleset === RULESET && r.names.split(", ").length === 5), "wrong ranked roster/ruleset");
-      check(results.at(-1).team === 3, "delayed crew did not finish last");
-      check(observer.db.room.id.find(code).state === "finished", "race did not finish");
-      const host = clients.find(c => c.identity.isEqual(observer.db.room.id.find(code).host));
-      await host.reducers.start({});
-      await wait(100);
-      check(observer.db.room.id.find(code).state === "countdown", "rematch missing");
-      check([...observer.db.team.iter()].filter(t=>t.room===code).every(t=>t.finishMs===0 && JSON.parse(t.body).stage===0), "rematch not reset");
-      check([...observer.db.player.iter()].filter(p=>p.room===code).every(p=>p.x===0&&p.z===0&&!p.action), "stale rematch inputs");
-      for (let i=0;i<20;i++) await clients[i].reducers.leave({});
-      await wait(200);
-      check(!observer.db.room.id.find(code), "empty room not removed");
-      check([...observer.db.player.iter()].every(p=>p.room!==code), "leases not cleaned");
-      check([...observer.db.result.iter()].filter(r=>r.room===code).length===4, "results erased");
-      return results.map(r => ({ team: r.team, timeMs: r.timeMs }));
-    } finally { clearInterval(timer); clients.forEach(c => c.disconnect()); }
-  });
-  assert.equal(report.length, 4);
-  console.log("PASS: 20 clients, 4 full races, protocol/role/host guards, countdown/race locks, leave/disconnect reconnects, stale inputs, rematch and persistent rankings", report);
-} finally { await browser.close(); }
+      throw new Error(message);
+    };
+    const waitFor = async (predicate, message, timeout = 6000) => {
+      const deadline = Date.now() + timeout;
+      while (Date.now() < deadline) {
+        const value = predicate();
+        if (value) return value;
+        await wait(50);
+      }
+      throw new Error(message);
+    };
+    const open = (token, queries) => new Promise((resolve, rejectConnection) => {
+      DbConnection.builder()
+        .withUri(server)
+        .withDatabaseName(database)
+        .withToken(token)
+        .onConnect((connection, _identity, nextToken) => {
+          const connected = () => resolve({ connection, token: nextToken });
+          if (!queries) {
+            connected();
+            return;
+          }
+          connection.subscriptionBuilder()
+            .onApplied(connected)
+            .onError(context => rejectConnection(new Error(String(context.event))))
+            .subscribe(queries);
+        })
+        .onConnectError((_context, error) => rejectConnection(error))
+        .build();
+    });
+
+    const nonce = Date.now().toString(36).toUpperCase().slice(-7);
+    const runRoom = async ({ label, challenge, crewSize, exerciseReconnect }) => {
+      const connections = [];
+      const connectClient = async (token, queries) => {
+        const session = await open(token, queries);
+        connections.push(session.connection);
+        return session;
+      };
+      const clients = [];
+      const clientTokens = [];
+      let observer;
+
+      try {
+        for (let role = 0; role < crewSize; role++) {
+          const session = await connectClient();
+          clients.push(session.connection);
+          clientTokens.push(session.token);
+        }
+        const outsider = (await connectClient()).connection;
+        const code = `Q${crewSize}${challenge}${nonce}`;
+        observer = (await connectClient(undefined, [
+          `SELECT * FROM room WHERE id = '${code}'`,
+          `SELECT * FROM player WHERE room = '${code}'`,
+          `SELECT * FROM team WHERE room = '${code}'`,
+          `SELECT * FROM result WHERE room = '${code}'`,
+        ])).connection;
+        const joinArgs = role => ({
+          code,
+          name: `${label} Pilot ${role + 1}`,
+          teamNumber: 0,
+          role,
+          ruleset: RULESET,
+          challenge,
+          crewSize,
+        });
+
+        await reject(
+          () => outsider.reducers.join({ ...joinArgs(0), role: crewSize }),
+          `${crewSize}-player room accepted role ${crewSize}`,
+        );
+        await reject(
+          () => outsider.reducers.join({ ...joinArgs(0), ruleset: RULESET - 1 }),
+          `${label} room accepted an obsolete ruleset`,
+        );
+
+        await clients[0].reducers.join(joinArgs(0));
+        const room = await waitFor(
+          () => observer.db.room.id.find(code),
+          `${label} room was not created`,
+        );
+        check(room.challenge === challenge && room.crewSize === crewSize, `${label} room lost its configuration`);
+        const initialTeam = await waitFor(
+          () => observer.db.team.id.find(`${code}:0`),
+          `${label} team was not created`,
+        );
+        const initialBody = JSON.parse(initialTeam.body);
+        check(initialBody.challenge === challenge && initialBody.crewSize === crewSize, `${label} body used the wrong mode`);
+
+        const otherChallenge = challenge === CHALLENGE.Difficult ? CHALLENGE.Medium : CHALLENGE.Difficult;
+        const otherCrewSize = crewSize === 3 ? 5 : 3;
+        await reject(
+          () => outsider.reducers.join({ ...joinArgs(0), challenge: otherChallenge }),
+          `${label} room accepted a mismatched challenge`,
+        );
+        await reject(
+          () => outsider.reducers.join({ ...joinArgs(0), crewSize: otherCrewSize }),
+          `${label} room accepted a mismatched crew size`,
+        );
+        await reject(() => clients[0].reducers.start({}), `${label} incomplete crew started with one pilot`);
+        await reject(
+          () => clients[1].reducers.join({ ...joinArgs(1), role: 0 }),
+          `${label} room accepted a duplicate role`,
+        );
+
+        for (let role = 1; role < crewSize; role++) {
+          await clients[role].reducers.join(joinArgs(role));
+          if (role < crewSize - 1) {
+            await reject(
+              () => clients[0].reducers.start({}),
+              `${label} room started before all ${crewSize} roles were present`,
+            );
+          }
+        }
+        await waitFor(
+          () => [...observer.db.player.iter()].filter(player => player.room === code && player.online).length === crewSize,
+          `${label} room did not expose all ${crewSize} connected roles`,
+        );
+        check(rolesFor(crewSize).length === crewSize, `${label} role contract does not match its crew size`);
+        await reject(() => clients[1].reducers.start({}), `${label} non-host started the race`);
+
+        await clients[0].reducers.start({});
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "countdown",
+          `${label} room did not enter countdown`,
+        );
+        await reject(
+          () => clients[0].reducers.join({ ...joinArgs(0), role: 1 }),
+          `${label} countdown allowed a role switch`,
+        );
+        await reject(
+          () => clients[0].reducers.join({ ...joinArgs(0), code: `${code}X` }),
+          `${label} countdown allowed a room hop`,
+        );
+        await clients[crewSize - 1].reducers.leave({});
+        await reject(
+          () => clients[crewSize - 1].reducers.join({ ...joinArgs(crewSize - 1), role: 0 }),
+          `${label} leave/rejoin changed a locked role`,
+        );
+        await clients[crewSize - 1].reducers.join(joinArgs(crewSize - 1));
+
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "racing",
+          `${label} room did not start racing`,
+          7000,
+        );
+        await reject(
+          () => outsider.reducers.join(joinArgs(0)),
+          `${label} room accepted a late pilot`,
+        );
+
+        if (exerciseReconnect) {
+          const disconnectedIdentity = clients[0].identity;
+          clients[0].disconnect();
+          await waitFor(
+            () => {
+              const currentRoom = observer.db.room.id.find(code);
+              return currentRoom && !currentRoom.host.isEqual(disconnectedIdentity);
+            },
+            `${label} host did not migrate`,
+          );
+          check(
+            [...observer.db.player.iter()].find(player => player.room === code && player.role === 0)?.online === false,
+            `${label} disconnected pilot lost its role lease`,
+          );
+          const reconnected = await connectClient(clientTokens[0]);
+          clients[0] = reconnected.connection;
+          await reject(
+            () => clients[0].reducers.join({ ...joinArgs(0), role: 1 }),
+            `${label} reconnect changed the leased role`,
+          );
+          await clients[0].reducers.join(joinArgs(0));
+        }
+
+        await wait(35);
+        const torsoRole = crewSize === 3 ? 1 : 2;
+        await reject(
+          () => clients[torsoRole].reducers.input({ x: Number.NaN, z: 0, action: false }),
+          `${label} room accepted a NaN input`,
+        );
+        await clients[torsoRole].reducers.input({ x: 99, z: -99, action: true });
+        await waitFor(
+          () => {
+            const player = observer.db.player.id.find(clients[torsoRole].identity);
+            return player?.x === 1 && player.z === -1;
+          },
+          `${label} input was not bounded`,
+        );
+        await wait(650);
+        await waitFor(
+          () => JSON.parse(observer.db.team.id.find(`${code}:0`).body).brace === false,
+          `${label} stale action kept affecting the body`,
+        );
+
+        const finishDeadline = Date.now() + 150000;
+        let result;
+        while (Date.now() < finishDeadline) {
+          result = [...observer.db.result.iter()].find(row => row.room === code);
+          if (result) break;
+          const team = observer.db.team.id.find(`${code}:0`);
+          check(team, `${label} team disappeared during its race`);
+          const body = JSON.parse(team.body);
+          const inputs = teammateInputs(body);
+          check(inputs.length === crewSize, `${label} generated ${inputs.length} inputs for ${crewSize} pilots`);
+          await Promise.all(inputs.map((input, role) => clients[role].reducers.input(input)));
+          await wait(50);
+        }
+        result ??= [...observer.db.result.iter()].find(row => row.room === code);
+        check(result, `${label} crew did not finish before the deadline`);
+        check(result.ruleset === RULESET, `${label} result used the wrong ruleset`);
+        check(result.challenge === challenge, `${label} result used the wrong challenge category`);
+        check(result.crewSize === crewSize, `${label} result used the wrong crew-size category`);
+        check(result.names.split(", ").length === crewSize, `${label} result recorded the wrong roster size`);
+        check(Number.isInteger(result.timeMs) && result.timeMs > 0, `${label} result did not preserve exact milliseconds`);
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "finished",
+          `${label} room did not finish after its crew`,
+        );
+
+        const rematchHostIdentity = observer.db.room.id.find(code).host;
+        const rematchHost = clients.find(client => client.identity.isEqual(rematchHostIdentity));
+        check(rematchHost, `${label} rematch host was unavailable`);
+        await rematchHost.reducers.start({});
+        await waitFor(
+          () => observer.db.room.id.find(code)?.state === "countdown",
+          `${label} rematch did not start`,
+        );
+        const resetTeam = observer.db.team.id.find(`${code}:0`);
+        const resetBody = JSON.parse(resetTeam.body);
+        check(resetTeam.finishMs === 0 && resetBody.stage === 0, `${label} rematch did not reset progress`);
+        check(resetTeam.challenge === challenge && resetTeam.crewSize === crewSize, `${label} rematch lost its category`);
+
+        await Promise.all(clients.map(client => client.reducers.leave({})));
+        await waitFor(() => !observer.db.room.id.find(code), `${label} empty room was not removed`, 5000);
+        check([...observer.db.player.iter()].every(player => player.room !== code), `${label} role leases were not cleaned`);
+        check([...observer.db.team.iter()].every(team => team.room !== code), `${label} team rows were not cleaned`);
+        check([...observer.db.result.iter()].filter(row => row.room === code).length === 1, `${label} persisted result was lost`);
+
+        return {
+          label,
+          challenge: result.challenge,
+          crewSize: result.crewSize,
+          timeMs: result.timeMs,
+        };
+      } finally {
+        connections.forEach(connection => connection.disconnect());
+      }
+    };
+
+    const scenarios = [
+      { label: "Difficult / 3-player", challenge: CHALLENGE.Difficult, crewSize: 3, exerciseReconnect: false },
+      { label: "Easy / 5-player", challenge: CHALLENGE.Easy, crewSize: 5, exerciseReconnect: true },
+    ];
+    const results = [];
+    for (const scenario of scenarios) results.push(await runRoom(scenario));
+    check(
+      new Set(results.map(result => `${result.challenge}:${result.crewSize}`)).size === scenarios.length,
+      "ranked results were not separated by challenge and crew size",
+    );
+    return results;
+  }, { server, database });
+
+  assert.deepEqual(
+    report.map(({ challenge, crewSize }) => [challenge, crewSize]),
+    [[2, 3], [0, 5]],
+  );
+  assert.ok(report.every(result => Number.isInteger(result.timeMs) && result.timeMs > 0));
+  console.log(
+    "PASS: dynamic 3/5-player readiness, room configuration locks, reconnect/input guards, authoritative finishes, and challenge/crew-categorized persistent results.",
+    report,
+  );
+} finally {
+  await browser.close();
+}

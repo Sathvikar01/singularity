@@ -1,12 +1,19 @@
-# Five-role Three.js verification
+# Multi-course coordination verification
 
-Verification commands and local backend setup are in ../README.md.
+Verification commands and isolated local-backend setup are in `../README.md`.
 
-Verified locally on 2026-09-05: 23 unit tests passed; TypeScript/Vite and SpacetimeDB builds passed; twenty clients completed four concurrent ranked races; the desktop/mobile browser suite passed; the production-built frontend completed practice and subscribed to the leaderboard without page errors. Production deployment was not performed.
+Verified locally on 2026-09-05. No cloud database or production deployment was changed.
 
-- Unit suite: deterministic full-course runs, all five role-omission cases, five practice input-isolation cases, Eyes aim isolation, dual-arm control, cargo release, simultaneous foot switches, gate ordering, checkpoint recovery, joint bounds, finite/bounded input, finished clocks and snapshot version checks.
-- Multiplayer suite: twenty independent clients and four full ranked finishes; incomplete crews, sixth roles, legacy protocols, role conflicts, host-only start, countdown/racing assignment locks, leave/rejoin, disconnect/resume, host migration, input expiry, rematch reset, persistence and cleanup.
-- Browser suite: desktop and mobile role UI, role locks, human-required practice completion, crew readiness, countdown, reload recovery and touch controls.
-- Production smoke suite: leaderboard subscription and complete unranked practice against a built frontend.
+- `npm test`: 38/38 deterministic physics tests passed.
+- `npm run build`: strict TypeScript and the Vite production build passed.
+- `spacetime build --module-path spacetimedb`: the authoritative server module passed.
+- `node tests/browser.mjs`: the desktop/mobile UI suite passed with no page errors or horizontal overflow.
+- `node tests/multiplayer.mjs`: guarded local multiplayer passed. An authoritative Difficult/3-player crew finished in 39.677s and an Easy/5-player crew finished in 19.186s.
 
-All mutating multiplayer tests target the isolated local singularity-five-role-test database. No cloud publication is performed by these tests. Screenshots are ignored under test-results/. Automated clients are not a substitute for human playtesting or a prolonged load test.
+The unit suite covers all three challenges in both crew modes, every requested role mapping, practice isolation, paired versus independent limb input, two-hand gripping, role necessity, ordered objectives, dynamic and narrow surfaces, course-specific checkpoint penalties, Difficult launch-window mistakes, exact millisecond formatting, deterministic replay, finite constrained physics, gates and incompatible snapshots.
+
+The browser suite covers all challenge choices, the requested three- and five-player role names, mode-specific practice, millisecond clocks, difficulty state, segregated leaderboard controls, touch controls and mobile responsiveness.
+
+The multiplayer suite covers both crew sizes, configured challenge/crew joins, dynamic readiness, role and configuration conflicts, host-only start, countdown/racing locks, reconnect leases, stale bounded input, rematch reset, authoritative finishes and challenge/crew fields on persistent results.
+
+All mutating multiplayer tests refuse non-local hosts and target only `singularity-coordination-test-v3` (or a strictly prefixed isolated variant). Screenshots live under `.impeccable/review/` and `test-results/`. Automated clients do not replace extended human playtesting or load testing.

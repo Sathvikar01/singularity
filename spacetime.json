@@ -1,0 +1,14 @@
+{
+  "database": "singularity-coordination-v3",
+  "module-path": "./spacetimedb",
+  "server": "maincloud",
+  "dev": {
+    "run": "npm run dev"
+  },
+  "generate": [
+    {
+      "language": "typescript",
+      "out-dir": "./src/module_bindings"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ export const SERVER =
   "https://maincloud.spacetimedb.com";
 export const DATABASE =
   (import.meta as any).env.VITE_SPACETIMEDB_DATABASE ||
-  "singularity-relay-five-role-v2";
+  "singularity-coordination-v3";
 export function connect(
   onReady: (c: DbConnection) => void,
   onUpdate: () => void,

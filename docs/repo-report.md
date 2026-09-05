@@ -1,17 +1,17 @@
 # Repository architecture
 
-The runtime is exclusively Three.js, TypeScript and SpacetimeDB. See ../README.md for play, local testing and release commands.
+The runtime is exclusively Three.js, TypeScript and SpacetimeDB. See `../README.md` for play, local testing and release commands.
 
-Five role slots map to six physical nodes: Eyes to head, Hands to both arms, Torso to the torso, and each leg to its own foot. ROLE, NODE_ROLES and COURSE in shared/physics.ts are the shared contract.
+`shared/physics.ts` is the shared deterministic contract. Six physical nodes represent torso, head, both hands and both feet. Three-player input expands Arms to both hands and Legs to both feet; five-player input maps Left Hand, Right Hand, Torso, Left Leg and Right Leg independently. The head follows the constrained body rather than consuming a player role.
 
-Six ordered challenges require scanning, bracing, cargo release, concurrent foot switches, a scan/brace combination beyond the sweeper, and a complete-body finish. The simulation owns all conditions. Three.js renders the same gate positions and hazard phase.
+The Easy, Medium and Difficult definitions each own their ordered objectives, gates, checkpoints, penalties and environment metadata. The simulation implements dual-hand objects, bend/brace posture, foot switches, moving and narrow support surfaces, climbing height, two precise Difficult placements and its synchronized launch window. Three.js builds a distinct course group for every definition and animates hazards from the same deterministic phase functions.
 
-Ranked rooms require five connected pilots per active team. The server freezes room/team/role at countdown. Leave and disconnect mark an active pilot offline while retaining the assignment. Rejoin is allowed only for that identity and assignment; online host ownership migrates. Empty rooms delete their teams and leases, but ranked results persist.
+The first pilot fixes a room's challenge and crew size. Ranked rooms require every role for that size on each active team. The server freezes room configuration, team and role at countdown. Leave and disconnect mark an active pilot offline while retaining the assignment; rejoin is allowed only for the same identity and assignment. Online host ownership migrates. Empty rooms delete their teams and leases, while ranked results persist.
 
-Client input has no role or pose field. It is bounded, rate limited and expires after 500 ms. Countdown and finished matches ignore input. Rematches reset bodies and input state. Protocol version 2 prevents old numeric assignments from being reinterpreted. Results include the ruleset version.
+Clients submit only bounded x/z/action input. Input is rate limited, expires after 500 ms, and is ignored outside a race. Rematches reset bodies and input state. Ruleset 3 prevents old numeric assignments or body JSON from being reinterpreted. Room, team and result rows all carry challenge and crew size; leaderboard views compare only matching rules.
 
-Practice uses exactly one human input slot and four independently generated teammates. A neutral human role cannot be silently replaced by AI.
+Practice uses exactly one human input slot and independently generated teammates for every other role. A neutral human role cannot be silently replaced by AI. Practice uses deterministic simulation timing and never writes a ranked result.
 
-Tests cover role necessity, input isolation, ordered challenge completion, finite deterministic physics, recovery, a twenty-client race, server restrictions, reconnects, rematches, desktop/mobile controls and full practice completion.
+Tests cover all six challenge/crew combinations, role necessity, paired and independent limb mapping, input isolation, dual-hand carrying, exact penalties and milliseconds, deterministic completion, finite constrained physics, room configuration locks, categorized results, reconnects, rematches, responsive controls and challenge-specific browser state.
 
-Production deployment requires a new versioned database because the schema and body JSON changed. Existing production records should remain in the old database.
+Production release targets the new `singularity-coordination-v3` database. Older production databases and their incompatible results remain intact.

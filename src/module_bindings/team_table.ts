@@ -16,4 +16,6 @@ export default __t.row({
   number: __t.u32(),
   body: __t.string(),
   finishMs: __t.u32().name("finish_ms"),
+  challenge: __t.u32(),
+  crewSize: __t.u32().name("crew_size"),
 });

@@ -18,7 +18,7 @@ api.create_repo(repo, repo_type="space", space_sdk="static", exist_ok=True)
 info = api.upload_folder(
     repo_id=repo, repo_type="space", folder_path=str(dist),
     delete_patterns=["assets/*", "native/**", "web/**"],
-    commit_message=sys.argv[1] if len(sys.argv) > 1 else "Deploy Three.js five-role game",
+    commit_message=sys.argv[1] if len(sys.argv) > 1 else "Deploy three-course coordination game",
 )
 print(info.commit_url)
 print("https://huggingface.co/spaces/" + repo)

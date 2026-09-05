@@ -16,4 +16,7 @@ export default __t.row({
   state: __t.string(),
   startAt: __t.u64().name("start_at"),
   created: __t.u64(),
+  ruleset: __t.u32(),
+  challenge: __t.u32(),
+  crewSize: __t.u32().name("crew_size"),
 });

@@ -18,4 +18,6 @@ export default __t.row({
   timeMs: __t.u32().name("time_ms"),
   ruleset: __t.u32(),
   created: __t.u64(),
+  challenge: __t.u32(),
+  crewSize: __t.u32().name("crew_size"),
 });

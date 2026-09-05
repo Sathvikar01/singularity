@@ -7,7 +7,9 @@ try {
   });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(process.env.TEST_URL || "https://sankalphs-singularity1.static.hf.space/");
+  await page.goto(
+    process.env.TEST_URL || "https://sankalphs-singularity.static.hf.space/",
+  );
   await page.locator("canvas").waitFor();
   await page.locator("#leaders").click();
   await page.waitForFunction(

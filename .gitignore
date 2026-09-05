@@ -2,8 +2,14 @@ node_modules/
 dist/
 .env*
 !.env.example
+!.env.development
 .spacetime/
+spacetime.local.json
+spacetime.*.local.json
 test-results/
 playwright-report/
+.impeccable/review/
 __pycache__/
 .tools/
+.vercel
+.env*

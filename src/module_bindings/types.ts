@@ -32,6 +32,8 @@ export const Result = __t.object("Result", {
   timeMs: __t.u32(),
   ruleset: __t.u32(),
   created: __t.u64(),
+  challenge: __t.u32(),
+  crewSize: __t.u32(),
 });
 export type Result = __Infer<typeof Result>;
 
@@ -41,6 +43,9 @@ export const Room = __t.object("Room", {
   state: __t.string(),
   startAt: __t.u64(),
   created: __t.u64(),
+  ruleset: __t.u32(),
+  challenge: __t.u32(),
+  crewSize: __t.u32(),
 });
 export type Room = __Infer<typeof Room>;
 
@@ -50,6 +55,8 @@ export const Team = __t.object("Team", {
   number: __t.u32(),
   body: __t.string(),
   finishMs: __t.u32(),
+  challenge: __t.u32(),
+  crewSize: __t.u32(),
 });
 export type Team = __Infer<typeof Team>;
 

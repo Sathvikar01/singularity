@@ -5,7 +5,9 @@ import {
   step,
   neutralInputs,
   RULESET,
-  ROLES,
+  isChallenge,
+  isCrewSize,
+  rolesFor,
   type Body,
 } from "../../shared/physics";
 const room = table(
@@ -16,6 +18,9 @@ const room = table(
     state: t.string(),
     startAt: t.u64(),
     created: t.u64(),
+    ruleset: t.u32().default(RULESET),
+    challenge: t.u32().default(0),
+    crewSize: t.u32().default(5),
   },
 );
 const player = table(
@@ -41,6 +46,8 @@ const team = table(
     number: t.u32(),
     body: t.string(),
     finishMs: t.u32(),
+    challenge: t.u32().default(0),
+    crewSize: t.u32().default(5),
   },
 );
 const result = table(
@@ -53,6 +60,9 @@ const result = table(
     timeMs: t.u32(),
     ruleset: t.u32(),
     created: t.u64(),
+    // Appended defaults preserve legacy leaderboard rows as Easy / five-player.
+    challenge: t.u32().default(0),
+    crewSize: t.u32().default(5),
   },
 );
 const tick = table(
@@ -67,13 +77,25 @@ export const init = db.init((ctx) => {
   ctx.db.tick.insert({ id: 0n, scheduledAt: ScheduleAt.interval(33333n) });
 });
 export const join = db.reducer(
-  { code: t.string(), name: t.string(), teamNumber: t.u32(), role: t.u32(), ruleset: t.u32() },
+  {
+    code: t.string(),
+    name: t.string(),
+    teamNumber: t.u32(),
+    role: t.u32(),
+    ruleset: t.u32(),
+    challenge: t.u32(),
+    crewSize: t.u32(),
+  },
   (ctx, a) => {
-    if (a.ruleset !== RULESET) throw new SenderError("Update your client to join this five-role course.");
+    if (a.ruleset !== RULESET)
+      throw new SenderError("Update your client to join this course.");
+    if (!isChallenge(a.challenge) || !isCrewSize(a.crewSize))
+      throw new SenderError("Choose a valid challenge and crew size.");
+    const requestedRoles = rolesFor(a.crewSize);
     const code = a.code.trim().toUpperCase();
     if (
       !/^[A-Z0-9]{3,12}$/.test(code) ||
-      a.role >= ROLES.length ||
+      a.role >= requestedRoles.length ||
       a.teamNumber > 3 ||
       !a.name.trim()
     )
@@ -84,8 +106,15 @@ export const join = db.reducer(
     const priorRoom = previous && ctx.db.room.id.find(previous.room);
     const locked = (state?: string) => state === "countdown" || state === "racing";
     if (previous && locked(priorRoom?.state) &&
-      (previous.room !== code || previous.team !== a.teamNumber || previous.role !== a.role))
-      throw new SenderError("Your team and role are locked until this race ends.");
+      (previous.room !== code ||
+        previous.team !== a.teamNumber ||
+        previous.role !== a.role ||
+        priorRoom!.ruleset !== a.ruleset ||
+        priorRoom!.challenge !== a.challenge ||
+        priorRoom!.crewSize !== a.crewSize))
+      throw new SenderError(
+        "Your room, challenge, crew size, team, and role are locked until this race ends.",
+      );
     let r = ctx.db.room.id.find(code);
     if (!r) {
       if ([...ctx.db.room.iter()].length >= 200)
@@ -96,8 +125,19 @@ export const join = db.reducer(
         state: "lobby",
         startAt: 0n,
         created: now(ctx),
+        ruleset: a.ruleset,
+        challenge: a.challenge,
+        crewSize: a.crewSize,
       });
     }
+    if (
+      r.ruleset !== a.ruleset ||
+      r.challenge !== a.challenge ||
+      r.crewSize !== a.crewSize
+    )
+      throw new SenderError(
+        "This room is configured for a different challenge or crew size.",
+      );
     if (
       locked(r.state) &&
       (!previous || previous.room !== code || previous.team !== a.teamNumber || previous.role !== a.role)
@@ -132,8 +172,10 @@ export const join = db.reducer(
         id,
         room: code,
         number: a.teamNumber,
-        body: JSON.stringify(createBody()),
+        body: JSON.stringify(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
+        challenge: r.challenge,
+        crewSize: r.crewSize,
       });
   },
 );
@@ -165,9 +207,15 @@ export const start = db.reducer((ctx) => {
     throw new SenderError("Race already running");
   const members = [...ctx.db.player.iter()].filter(q => q.room === r.id);
   const activeTeams = new Set(members.filter(q => q.online).map(q => q.team));
+  if (!isChallenge(r.challenge) || !isCrewSize(r.crewSize) || r.ruleset !== RULESET)
+    throw new SenderError("This room has an incompatible course configuration.");
+  const requiredRoles = rolesFor(r.crewSize);
   for (const number of activeTeams) {
-    if (!ROLES.every((_, role) => members.some(q => q.team === number && q.role === role && q.online)))
-      throw new SenderError(`Team ${number + 1} needs all five connected roles before starting.`);
+    if (!requiredRoles.every((_, role) =>
+      members.some(q => q.team === number && q.role === role && q.online)))
+      throw new SenderError(
+        `Team ${number + 1} needs all ${r.crewSize} connected roles before starting.`,
+      );
   }
   for (const q of members) {
     if (!activeTeams.has(q.team)) ctx.db.player.id.delete(q.id);
@@ -177,8 +225,10 @@ export const start = db.reducer((ctx) => {
     if (tm.room === r.id)
       ctx.db.team.id.update({
         ...tm,
-        body: JSON.stringify(createBody()),
+        body: JSON.stringify(createBody(r.challenge, r.crewSize)),
         finishMs: 0,
+        challenge: r.challenge,
+        crewSize: r.crewSize,
       });
   ctx.db.room.id.update({
     ...r,
@@ -222,6 +272,11 @@ export const simulate = db.reducer(
         ctx.db.room.id.update(r);
       }
       if (r.state !== "racing") continue;
+      if (!isChallenge(r.challenge) || !isCrewSize(r.crewSize) || r.ruleset !== RULESET) {
+        ctx.db.room.id.update({ ...r, state: "finished" });
+        continue;
+      }
+      const roomRoles = rolesFor(r.crewSize);
       let active = 0,
         finished = 0;
       for (const tm of ctx.db.team.iter()) {
@@ -233,17 +288,32 @@ export const simulate = db.reducer(
           continue;
         }
         const b = JSON.parse(tm.body) as Body;
-        if (b.version !== RULESET) { ctx.db.room.id.update({ ...r, state: "finished" }); continue; }
-        const inputs = neutralInputs();
+        if (
+          b.version !== r.ruleset ||
+          b.challenge !== r.challenge ||
+          b.crewSize !== r.crewSize ||
+          tm.challenge !== r.challenge ||
+          tm.crewSize !== r.crewSize
+        ) {
+          ctx.db.room.id.update({ ...r, state: "finished" });
+          continue;
+        }
+        const inputs = neutralInputs(r.crewSize);
         for (const p of members)
-          if (p.online && p.team === tm.number && p.role < ROLES.length && time - p.seen < 500000n)
+          if (p.online && p.team === tm.number && p.role < roomRoles.length && time - p.seen < 500000n)
             inputs[p.role] = { x: p.x, z: p.z, action: p.action };
         step(b, inputs);
         // Wall-clock time is authoritative; simulation lag never improves a ranked result.
         const finishMs = b.finished
-          ? Number((time - r.startAt) / 1000n) + b.falls * 3000
+          ? Number((time - r.startAt) / 1000n) + b.penaltyMs
           : 0;
-        ctx.db.team.id.update({ ...tm, body: JSON.stringify(b), finishMs });
+        ctx.db.team.id.update({
+          ...tm,
+          body: JSON.stringify(b),
+          finishMs,
+          challenge: r.challenge,
+          crewSize: r.crewSize,
+        });
         if (finishMs) {
           finished++;
           ctx.db.result.insert({
@@ -256,6 +326,8 @@ export const simulate = db.reducer(
               .join(", "),
             timeMs: finishMs,
             ruleset: RULESET,
+            challenge: r.challenge,
+            crewSize: r.crewSize,
             created: time,
           });
         }
