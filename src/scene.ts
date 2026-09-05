@@ -100,6 +100,8 @@ export function createScene(container: HTMLElement) {
 
   const material = (color: number, metalness = 0.05, roughness = 0.6) =>
     new THREE.MeshStandardMaterial({ color, metalness, roughness });
+  const debrisGeometry = new THREE.IcosahedronGeometry(1, 0);
+  const debrisTransform = new THREE.Object3D();
   const makeBox = (
     group: THREE.Group,
     width: number,
@@ -171,14 +173,20 @@ export function createScene(container: HTMLElement) {
   }
 
   function addSpaceDebris(group: THREE.Group, dark: THREE.Material, length: number, seed = 0) {
+    const debris = new THREE.InstancedMesh(debrisGeometry, dark, 76);
     for (let index = 0; index < 76; index++) {
       const angle = index * 2.399 + seed;
       const radius = 20 + (index % 9) * 3;
-      const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3 + (index % 5) * 0.24, 0), dark);
-      rock.position.set(Math.cos(angle) * radius, -3 - (index % 7) * 1.5, Math.sin(angle) * radius + length / 2);
-      rock.rotation.set(index, index * 0.3, 0);
-      group.add(rock);
+      const size = 0.3 + (index % 5) * 0.24;
+      debrisTransform.position.set(Math.cos(angle) * radius, -3 - (index % 7) * 1.5, Math.sin(angle) * radius + length / 2);
+      debrisTransform.rotation.set(index, index * 0.3, 0);
+      debrisTransform.scale.setScalar(size);
+      debrisTransform.updateMatrix();
+      debris.setMatrixAt(index, debrisTransform.matrix);
     }
+    debris.instanceMatrix.needsUpdate = true;
+    debris.computeBoundingSphere();
+    group.add(debris);
   }
 
   function buildEasy(): CourseRig {
