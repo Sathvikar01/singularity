@@ -61,6 +61,52 @@ try {
     });
 
     const nonce = Date.now().toString(36).toUpperCase().slice(-7);
+    const verifyReplacementConnectionOwnsLease = async () => {
+      const connections = [];
+      const code = `R50${nonce}`;
+      try {
+        const first = await open();
+        connections.push(first.connection);
+        const observer = await open(undefined, [
+          `SELECT * FROM room WHERE id = '${code}'`,
+          `SELECT * FROM player WHERE room = '${code}'`,
+        ]);
+        connections.push(observer.connection);
+        const joinArgs = {
+          code,
+          name: "Replacement connection",
+          teamNumber: 0,
+          role: 0,
+          ruleset: RULESET,
+          challenge: CHALLENGE.Easy,
+          crewSize: 5,
+        };
+        await first.connection.reducers.join(joinArgs);
+        await waitFor(
+          () => observer.connection.db.player.id.find(first.connection.identity)?.online,
+          "initial connection did not claim its player lease",
+        );
+
+        const replacement = await open(first.token);
+        connections.push(replacement.connection);
+        check(replacement.connection.identity.isEqual(first.connection.identity), "replacement token changed identity");
+        await replacement.connection.reducers.join(joinArgs);
+        await first.connection.reducers.leave({});
+        first.connection.disconnect();
+        await wait(250);
+        check(
+          observer.connection.db.player.id.find(replacement.connection.identity)?.online === true,
+          "stale connection released the replacement player's lease",
+        );
+        await replacement.connection.reducers.leave({});
+        await waitFor(
+          () => !observer.connection.db.player.id.find(replacement.connection.identity),
+          "replacement connection could not release its own lease",
+        );
+      } finally {
+        connections.forEach(connection => connection.disconnect());
+      }
+    };
     const runRoom = async ({ label, challenge, crewSize, exerciseReconnect }) => {
       const connections = [];
       const connectClient = async (token, queries) => {
@@ -366,6 +412,7 @@ try {
       { label: "Easy / 5-player", challenge: CHALLENGE.Easy, crewSize: 5, exerciseReconnect: true },
     ];
     const results = [];
+    await verifyReplacementConnectionOwnsLease();
     for (const scenario of scenarios) results.push(await runRoom(scenario));
     await verifyAbandonedTeamDoesNotBlock();
     check(

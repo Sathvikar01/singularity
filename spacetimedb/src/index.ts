@@ -75,11 +75,18 @@ const result = table(
     crewSize: t.u32().default(5),
   },
 );
+const connectionLease = table(
+  {},
+  {
+    id: t.identity().primaryKey(),
+    connection: t.connectionId(),
+  },
+);
 const tick = table(
   {},
   { id: t.u64().primaryKey().autoInc(), scheduledAt: t.scheduleAt() },
 );
-const db = schema({ room, player, team, result, tick });
+const db = schema({ room, player, team, result, connectionLease, tick });
 export default db;
 const now = (ctx: { timestamp: { microsSinceUnixEpoch: bigint } }) =>
   ctx.timestamp.microsSinceUnixEpoch;
@@ -110,6 +117,8 @@ export const join = db.reducer(
     crewSize: t.u32(),
   },
   (ctx, a) => {
+    if (!ctx.connectionId)
+      throw new SenderError("Join from a connected game client.");
     if (a.ruleset !== RULESET)
       throw new SenderError("Update your client to join this course.");
     if (!isChallenge(a.challenge) || !isCrewSize(a.crewSize))
@@ -193,6 +202,11 @@ export const join = db.reducer(
           throw new SenderError("That body part already has a pilot.");
       }
     ctx.db.player.id.delete(ctx.sender);
+    ctx.db.connectionLease.id.delete(ctx.sender);
+    ctx.db.connectionLease.insert({
+      id: ctx.sender,
+      connection: ctx.connectionId,
+    });
     ctx.db.player.insert({
       id: ctx.sender,
       room: code,
@@ -221,6 +235,8 @@ export const join = db.reducer(
 export const input = db.reducer(
   { x: t.f64(), z: t.f64(), action: t.bool() },
   (ctx, a) => {
+    const lease = ctx.db.connectionLease.id.find(ctx.sender);
+    if (!ctx.connectionId || !lease?.connection.isEqual(ctx.connectionId)) return;
     const p = ctx.db.player.id.find(ctx.sender);
     if (!p || !p.online) return;
     if (!phasePolicy(ctx.db.room.id.find(p.room)?.state).acceptsInput) return;
@@ -237,6 +253,9 @@ export const input = db.reducer(
   },
 );
 export const start = db.reducer((ctx) => {
+  const lease = ctx.db.connectionLease.id.find(ctx.sender);
+  if (!ctx.connectionId || !lease?.connection.isEqual(ctx.connectionId))
+    throw new SenderError("Join first");
   const p = ctx.db.player.id.find(ctx.sender);
   if (!p || !p.online) throw new SenderError("Join first");
   const r = ctx.db.room.id.find(p.room);
@@ -302,6 +321,9 @@ export const start = db.reducer((ctx) => {
 });
 // A disconnected pilot retains the same match lease. Leaving cannot bypass the lock.
 const releasePlayer = (ctx: any) => {
+  const lease = ctx.db.connectionLease.id.find(ctx.sender);
+  if (!ctx.connectionId || !lease?.connection.isEqual(ctx.connectionId)) return;
+  ctx.db.connectionLease.id.delete(ctx.sender);
   const p = ctx.db.player.id.find(ctx.sender);
   if (!p) return;
   const r = ctx.db.room.id.find(p.room);

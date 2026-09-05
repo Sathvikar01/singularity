@@ -10,6 +10,12 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const ConnectionLease = __t.object("ConnectionLease", {
+  id: __t.identity(),
+  connection: __t.connectionId(),
+});
+export type ConnectionLease = __Infer<typeof ConnectionLease>;
+
 export const Player = __t.object("Player", {
   id: __t.identity(),
   room: __t.string(),
