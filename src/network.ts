@@ -1,10 +1,13 @@
-import { DbConnection } from "./module_bindings";
+import { DbConnection } from "./module_bindings/index.ts";
+export { readRankedProjection } from "./ranked-projection.ts";
+const env = (import.meta as { env?: Record<string, string | undefined> }).env ?? {};
 export const SERVER =
-  (import.meta as any).env.VITE_SPACETIMEDB_URI ||
+  env.VITE_SPACETIMEDB_URI ||
   "https://maincloud.spacetimedb.com";
 export const DATABASE =
-  (import.meta as any).env.VITE_SPACETIMEDB_DATABASE ||
+  env.VITE_SPACETIMEDB_DATABASE ||
   "singularity-coordination-v3";
+
 export function connect(
   onReady: (c: DbConnection) => void,
   onUpdate: () => void,
