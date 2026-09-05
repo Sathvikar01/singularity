@@ -8,10 +8,10 @@ The Easy, Medium and Difficult definitions each own their ordered objectives, ga
 
 The first pilot fixes a room's challenge and crew size. Ranked rooms require every role for that size on each active team. The server freezes room configuration, team and role at countdown. Leave and disconnect mark an active pilot offline while retaining the assignment; rejoin is allowed only for the same identity and assignment. Online host ownership migrates. Empty rooms delete their teams and leases, while ranked results persist.
 
-Clients submit only bounded x/z/action input. Input is rate limited, expires after 500 ms, and is ignored outside a race. Rematches reset bodies and input state. Ruleset 3 prevents old numeric assignments or body JSON from being reinterpreted. Room, team and result rows all carry challenge and crew size; leaderboard views compare only matching rules.
+Clients submit only bounded x/z/action input. Input is rate limited, expires after 500 ms, and is ignored outside a race. Rematches reset bodies and input state. Ruleset 4 prevents old numeric assignments or body JSON from being reinterpreted. Room, team and result rows all carry challenge and crew size; leaderboard views compare only matching rules.
 
 Practice uses exactly one human input slot and independently generated teammates for every other role. A neutral human role cannot be silently replaced by AI. Practice uses deterministic simulation timing and never writes a ranked result.
 
 Tests cover all six challenge/crew combinations, role necessity, paired and independent limb mapping, input isolation, dual-hand carrying, exact penalties and milliseconds, deterministic completion, finite constrained physics, room configuration locks, categorized results, reconnects, rematches, responsive controls and challenge-specific browser state.
 
-Production release targets the new `singularity-coordination-v3` database. Older production databases and their incompatible results remain intact.
+Production release targets the new `singularity-coordination-v4` database. Older production databases and their incompatible results remain intact.

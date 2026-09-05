@@ -1,5 +1,5 @@
 {
-  "database": "singularity-coordination-v3",
+  "database": "singularity-coordination-v4",
   "module-path": "./spacetimedb",
   "server": "maincloud",
   "dev": {

@@ -16,4 +16,4 @@ The browser suite covers all challenge choices, the requested three- and five-pl
 
 The multiplayer suite covers both crew sizes, configured challenge/crew joins, dynamic readiness, role and configuration conflicts, host-only start, countdown/racing locks, reconnect leases, stale bounded input, rematch reset, authoritative finishes and challenge/crew fields on persistent results.
 
-All mutating multiplayer tests refuse non-local hosts and target only `singularity-coordination-test-v3` (or a strictly prefixed isolated variant). Screenshots live under `.impeccable/review/` and `test-results/`. Automated clients do not replace extended human playtesting or load testing.
+All mutating multiplayer tests refuse non-local hosts and target only `singularity-coordination-test-v4` (or a strictly prefixed isolated variant). Screenshots live under `.impeccable/review/` and `test-results/`. Automated clients do not replace extended human playtesting or load testing.

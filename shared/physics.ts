@@ -33,7 +33,7 @@ export {
 export type { Challenge, ChallengeId, CourseDefinition, CrewSize, Stage, StageKind } from "./course.ts";
 
 export const DT = 1 / SIMULATION_HZ;
-export const RULESET = 3;
+export const RULESET = 4;
 
 export type RoleDefinition = {
   name: string;
@@ -82,6 +82,7 @@ export type Body = {
   brace: boolean;
   bend: boolean;
   previousActions: boolean[];
+  hazardContacts: boolean[];
   lockout: number;
   syncStarted: boolean;
 };
@@ -126,6 +127,7 @@ function snapshotError(value: unknown, expected: SnapshotExpectation): string | 
   if (!Array.isArray(value.handGrip) || value.handGrip.length !== 2 || !value.handGrip.every(item => Number.isInteger(item) && Number(item) >= -1 && Number(item) < course.payloads.length)) return "Snapshot hand grip state is invalid.";
   if (!Array.isArray(value.feet) || value.feet.length !== 2 || !value.feet.every(item => isFiniteNumber(item) && item >= 0 && item <= 1)) return "Snapshot foot state is invalid.";
   if (!Array.isArray(value.previousActions) || value.previousActions.length !== crewSize || !value.previousActions.every(item => typeof item === "boolean")) return "Snapshot action history is invalid.";
+  if (!Array.isArray(value.hazardContacts) || value.hazardContacts.length !== course.hazards.length || !value.hazardContacts.every(item => typeof item === "boolean")) return "Snapshot hazard contact state is invalid.";
 
   if (!isNonNegativeInteger(value.stage) || value.stage > course.stages.length) return "Snapshot stage is invalid.";
   if (!isNonNegativeInteger(value.falls) || !isNonNegativeInteger(value.mistakes) || !isNonNegativeInteger(value.penaltyMs) || !isNonNegativeInteger(value.ticks) || !isNonNegativeInteger(value.lockout)) return "Snapshot counters are invalid.";
@@ -162,6 +164,20 @@ export const neutralInput = (): Input => ({ x: 0, z: 0, action: false });
 export const neutralInputs = (crewSize: number = 5): Input[] => rolesFor(crewSize).map(neutralInput);
 const node = (x: number, y: number, z: number): Node => ({ x, y, z, px: x, py: y, pz: z });
 
+function spawnBodyNodes(challenge: ChallengeId, z: number, ticks: number) {
+  const center = platformCenter(challenge, z, ticks);
+  const queriedSurface = groundAt(challenge, center, z, ticks);
+  const surface = queriedSurface > -10 ? queriedSurface : 0;
+  return [
+    node(center, surface + 2, z),
+    node(center, surface + 3, z),
+    node(center - 1, surface + 2, z),
+    node(center + 1, surface + 2, z),
+    node(center - 0.45, surface + 0.35, z),
+    node(center + 0.45, surface + 0.35, z),
+  ];
+}
+
 export function createBody(challenge: number = CHALLENGE.Easy, crewSize: number = 5, z?: number): Body {
   const challengeId = isChallenge(challenge) ? challenge : CHALLENGE.Easy;
   const size = isCrewSize(crewSize) ? crewSize : 5;
@@ -171,7 +187,7 @@ export function createBody(challenge: number = CHALLENGE.Easy, crewSize: number 
     version: RULESET,
     challenge: challengeId,
     crewSize: size,
-    nodes: [node(0, 2, start), node(0, 3, start), node(-1, 2, start), node(1, 2, start), node(-0.45, 0.35, start), node(0.45, 0.35, start)],
+    nodes: spawnBodyNodes(challengeId, start, 0),
     objects: course.payloads.map(({ spawn: [x, y, objectZ] }) => node(x, y, objectZ)),
     placed: course.payloads.map(() => false),
     handGrip: [-1, -1],
@@ -187,6 +203,7 @@ export function createBody(challenge: number = CHALLENGE.Easy, crewSize: number 
     brace: false,
     bend: false,
     previousActions: neutralInputs(size).map(() => false),
+    hazardContacts: course.hazards.map(() => false),
     lockout: 0,
     syncStarted: false,
   };
@@ -241,7 +258,7 @@ function resetObjectAtCheckpoint(body: Body, objectIndex: number) {
   const stage = challengeFor(body.challenge).stages[body.stage];
   const carrying = ["movingCarry", "narrowCarry", "unstableCarry"].includes(stage?.kind ?? "");
   const spawn = courseFor(body.challenge).payloads[objectIndex].spawn;
-  const x = carrying ? 0 : spawn[0];
+  const x = carrying ? platformCenter(body.challenge, stage.spawn + 1.8, body.ticks) : spawn[0];
   const y = carrying ? groundAt(body.challenge, x, stage.spawn + 1.8, body.ticks) + 0.6 : spawn[1];
   const z = carrying ? stage.spawn + 1.8 : spawn[2];
   body.objects[objectIndex] = node(x, y, z);
@@ -249,12 +266,45 @@ function resetObjectAtCheckpoint(body: Body, objectIndex: number) {
 
 function recover(body: Body) {
   const stage = challengeFor(body.challenge).stages[body.stage];
-  body.nodes = createBody(body.challenge, body.crewSize, stage?.spawn ?? 0).nodes;
+  body.nodes = spawnBodyNodes(body.challenge, stage?.spawn ?? 0, body.ticks);
   body.falls++;
   body.penaltyMs += challengeFor(body.challenge).fallPenaltyMs;
   body.handGrip = [-1, -1]; body.charge = 0; body.feet = [0, 0]; body.brace = false; body.bend = false; body.lockout = 12;
   body.syncStarted = false;
+  body.hazardContacts.fill(false);
   body.objects.forEach((_, index) => resetObjectAtCheckpoint(body, index));
+}
+
+function movingPlatformDelta(body: Body, point: Node, maxHeight: number) {
+  const band = courseFor(body.challenge).platformBands.find(candidate =>
+    point.z > candidate.minZ && point.z < candidate.maxZ
+  );
+  if (!band || point.y < band.groundY - 0.1 || point.y > band.groundY + maxHeight) return undefined;
+  const previousCenter = platformCenter(body.challenge, point.z, body.ticks - 1);
+  if (Math.abs(point.x - previousCenter) > band.halfWidth + 0.12) return undefined;
+  return platformCenter(body.challenge, point.z, body.ticks) - previousCenter;
+}
+
+function carryMovingSupports(body: Body) {
+  const footDeltas = body.nodes
+    .slice(4)
+    .map(foot => movingPlatformDelta(body, foot, 0.46))
+    .filter((value): value is number => value !== undefined);
+  if (footDeltas.length > 0) {
+    const delta = footDeltas.reduce((sum, value) => sum + value, 0) / footDeltas.length;
+    for (const point of body.nodes) {
+      point.x += delta;
+      point.px += delta;
+    }
+  }
+  for (let index = 0; index < body.objects.length; index++) {
+    if (body.placed[index] || body.handGrip.includes(index)) continue;
+    const object = body.objects[index];
+    const delta = movingPlatformDelta(body, object, 0.62);
+    if (delta === undefined) continue;
+    object.x += delta;
+    object.px += delta;
+  }
 }
 
 function advance(body: Body) {
@@ -415,6 +465,7 @@ export function step(body: Body, raw: Input[]) {
   const crewInputs = sanitizeInputs(body, raw), controls = expandCrewInputs(body, crewInputs);
   if (body.nodes[0].y < -5 || body.objects.some((object, index) => !body.placed[index] && object.y < -8)) { recover(body); return; }
   body.ticks++; body.lockout = Math.max(0, body.lockout - 1); body.brace = controls.torso.action; body.bend = stage.kind === "duck" && controls.torso.action;
+  carryMovingSupports(body);
   const torso = body.nodes[0];
   const canonical = [controls.torso, neutralInput(), controls.hands[0], controls.hands[1], controls.legs[0], controls.legs[1]];
   for (let index = 0; index < body.nodes.length; index++) {

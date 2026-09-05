@@ -14,7 +14,9 @@ import {
   isChallenge,
   isCrewSize,
   isFinalAligned,
+  groundAt,
   neutralInputs,
+  platformCenter,
   practiceInputs,
   rolesFor,
   securelyHeld,
@@ -114,6 +116,56 @@ test("challenge and crew validators reject invalid snapshot selectors", () => {
   assert.equal(challengeFor(999), CHALLENGES[CHALLENGE.Easy]);
   assert.equal(createBody(999, 4).challenge, CHALLENGE.Easy);
   assert.equal(createBody(999, 4).crewSize, 5);
+});
+
+test("checkpoint bodies spawn settled on their actual support surface", () => {
+  for (const challenge of CHALLENGES) {
+    for (const stage of challenge.stages) {
+      const body = createBody(challenge.id, 5, stage.spawn);
+      for (const foot of body.nodes.slice(4)) {
+        const surface = groundAt(challenge.id, foot.x, foot.z, body.ticks);
+        assert.ok(surface > -10, `${challenge.difficulty} ${stage.name} spawned over the void`);
+        assert.ok(Math.abs(foot.y - surface - 0.35) < 1e-9, `${challenge.difficulty} ${stage.name} foot height was not settled`);
+        assert.equal(foot.y, foot.py, `${challenge.difficulty} ${stage.name} injected vertical velocity`);
+      }
+    }
+  }
+});
+
+test("a planted neutral body rides a moving support without phantom drift", () => {
+  const body = createBody(CHALLENGE.Difficult, 5, 22);
+  const startingOffset = body.nodes[0].x - platformCenter(body.challenge, body.nodes[0].z, body.ticks);
+  for (let tick = 0; tick < 90; tick++) step(body, neutralInputs(5));
+  const endingOffset = body.nodes[0].x - platformCenter(body.challenge, body.nodes[0].z, body.ticks);
+
+  assert.equal(body.falls, 0);
+  assert.ok(Math.abs(endingOffset - startingOffset) < 0.35, `moving deck drifted by ${endingOffset - startingOffset}`);
+  assertFiniteAndJointBounded(body);
+});
+
+test("recovery uses the moving platform pose at the live simulation tick", () => {
+  const body = createBody(CHALLENGE.Difficult, 5);
+  body.stage = 2;
+  body.ticks = 37;
+  body.nodes[0].y = -20;
+  step(body, neutralInputs(5));
+
+  const stage = challengeFor(body.challenge).stages[body.stage];
+  const expectedCenter = platformCenter(body.challenge, stage.spawn, body.ticks);
+  assert.equal(body.nodes[0].x, expectedCenter);
+  assert.equal(body.nodes[0].px, expectedCenter);
+  for (const foot of body.nodes.slice(4)) {
+    const surface = groundAt(body.challenge, foot.x, foot.z, body.ticks);
+    assert.ok(Math.abs(foot.y - surface - 0.35) < 1e-9);
+    assert.equal(foot.py, foot.y);
+  }
+
+  step(body, neutralInputs(5));
+  const maximumSpeed = Math.max(...body.nodes.map(point =>
+    Math.hypot(point.x - point.px, point.y - point.py, point.z - point.pz) / (1 / 30)
+  ));
+  assert.ok(maximumSpeed < 6, `checkpoint injected ${maximumSpeed.toFixed(2)} units/s`);
+  assert.equal(body.falls, 1);
 });
 
 test("three- and five-player role definitions have the requested order and controls", () => {

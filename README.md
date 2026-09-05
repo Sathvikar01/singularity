@@ -17,7 +17,7 @@ A Three.js browser game where either three or five pilots control one shared phy
 
 - [GitHub](https://github.com/Sathvikar01/singularity) is the source repository (`master`).
 - [Hugging Face](https://huggingface.co/spaces/sankalphs/singularity) contains generated static deployment artifacts (`main`). Its history is intentionally separate; deploy it with `scripts/deploy.py` rather than merging its branch into the source branch.
-- The [`sankalpsss28` SpacetimeDB account](https://spacetimedb.com/@sankalpsss28) hosts the production SpacetimeDB modules. Ruleset 3 targets `singularity-coordination-v3`; the incompatible older databases remain intact.
+- The [`sankalpsss28` SpacetimeDB account](https://spacetimedb.com/@sankalpsss28) hosts the production SpacetimeDB modules. Ruleset 4 targets `singularity-coordination-v4`; the incompatible older databases remain intact.
 
 ## Play
 
@@ -43,7 +43,7 @@ Desktop keyboard and mobile touch controls are supported. Up to four colored tea
 - `src/scene.ts`: three procedural Three.js environments, character bodies, objects, gates, moving hazards, unstable platforms, lighting and camera.
 - `src/module_bindings/`: generated client protocol.
 
-Clients submit only x/z/action. The server derives the role from its player row, rejects stale protocols or mismatched room configurations, expires inputs after 500 ms, and records exact finish times using server timestamps plus simulation penalties. Room, team and result rows carry challenge and crew size; ruleset 3 records never mix with incompatible results.
+Clients submit only x/z/action. The server derives the role from its player row, rejects stale protocols or mismatched room configurations, expires inputs after 500 ms, and records exact finish times using server timestamps plus simulation penalties. Room, team and result rows carry challenge and crew size; ruleset 4 records never mix with incompatible results.
 
 ## Develop and verify
 
@@ -61,7 +61,7 @@ spacetime generate
 Use an isolated local backend for all automated multiplayer checks:
 
 ```sh
-spacetime start --listen-addr 127.0.0.1:3101 --data-dir .spacetime/coordination-v3-qa
+spacetime start --listen-addr 127.0.0.1:3101 --data-dir .spacetime/coordination-v4-qa
 ```
 
 Then, in a second terminal, build, generate bindings, publish the local database and start Vite:
@@ -70,19 +70,19 @@ Then, in a second terminal, build, generate bindings, publish the local database
 spacetime dev
 ```
 
-The tracked `.env.development` and `spacetime.dev.json` keep both Vite and the CLI on `http://127.0.0.1:3101/singularity-coordination-test-v3`. For one-shot setup, use `spacetime publish --env dev`, `spacetime generate --env dev`, then `npm run dev` instead. Run `node tests/browser.mjs` and `node tests/multiplayer.mjs`; the multiplayer suite covers both crew sizes and categorized results. Screenshots go to ignored `test-results/`. `tests/live-space.mjs` is a read-only production smoke/practice check; `TEST_URL` can point it at a local production preview.
+The local `.env.development` and tracked `spacetime.dev.json` keep Vite and the CLI on `http://127.0.0.1:3101/singularity-coordination-test-v4`. For one-shot setup, use `spacetime publish --env dev`, `spacetime generate --env dev`, then `npm run dev` instead. Run `node tests/browser.mjs` and `node tests/multiplayer.mjs`; the multiplayer suite covers both crew sizes and categorized results. Screenshots go to ignored `test-results/`. `tests/live-space.mjs` is a read-only production smoke/practice check; `TEST_URL` can point it at a local production preview.
 
 ## Release
 
-Ruleset 3 changes roles, bodies, rooms, and result categories. Publish it to the new versioned database, preserving old production data and results. Do not force a destructive reset on an older production database.
+Ruleset 4 changes body snapshots and support-surface behavior. Publish it to the new versioned database, preserving old production data and results. Do not force a destructive reset on an older production database.
 
 ```sh
-spacetime publish singularity-coordination-v3
+spacetime publish singularity-coordination-v4
 npm run build
 python scripts/deploy.py "Deploy three-course coordination game"
 ```
 
-`spacetime.json` declares the production module, database and generated TypeScript bindings. `spacetime.dev.json` safely overrides the server and database for isolated local development. The default client target is `singularity-coordination-v3` on Maincloud; override the public settings using `.env.example` when needed. Deploy the backend before its matching frontend. The deployment script uploads the browser game at the Space root and removes obsolete hosted build directories. Publication is a separate release action; local verification does not publish the game.
+`spacetime.json` declares the production module, database and generated TypeScript bindings. `spacetime.dev.json` safely overrides the server and database for isolated local development. The default client target is `singularity-coordination-v4` on Maincloud; override the public settings using `.env.example` when needed. Deploy the backend before its matching frontend. The deployment script uploads the browser game at the Space root and removes obsolete hosted build directories. Publication is a separate release action; local verification does not publish the game.
 
 Install the Python deployment dependency with `python -m pip install -r requirements-deploy.txt` before the first Space release.
 

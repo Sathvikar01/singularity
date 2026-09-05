@@ -2,11 +2,11 @@ import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 
 const server = process.env.SPACETIMEDB_URI || "http://127.0.0.1:3101";
-const database = process.env.SPACETIMEDB_DATABASE || "singularity-coordination-test-v3";
+const database = process.env.SPACETIMEDB_DATABASE || "singularity-coordination-test-v4";
 const localHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 if (
   !localHosts.has(new URL(server).hostname) ||
-  !/^singularity-coordination-test-v3(?:-|$)/.test(database)
+  !/^singularity-coordination-test-v4(?:-|$)/.test(database)
 ) {
   throw new Error("Refusing to run mutating multiplayer tests outside an isolated local test database.");
 }
