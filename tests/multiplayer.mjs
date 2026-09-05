@@ -580,16 +580,27 @@ try {
     window.__rankedUiObserver = observer;
   });
   await page.waitForTimeout(500);
-  await page.evaluate(() => {
-    window.__rankedUiMetrics.mutations = 0;
-    window.__rankedUiObserver.takeRecords();
-  });
-  await page.waitForTimeout(2_000);
-  const rankedUi = await page.evaluate(() => ({
-    mutationsPerSecond: window.__rankedUiMetrics.mutations / 2,
-    stableCourseStage: window.__rankedUiMetrics.courseStage === document.querySelector("#course-stages")?.firstElementChild,
-    stableRoleCard: window.__rankedUiMetrics.roleCard === document.querySelector("#role-cards")?.firstElementChild,
-    stableMember: window.__rankedUiMetrics.member === document.querySelector("#members")?.firstElementChild,
+  const rankedUi = await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(start => {
+      window.__rankedUiMetrics.mutations = 0;
+      window.__rankedUiObserver.takeRecords();
+      const sample = now => {
+        if (now - start < 2_000) {
+          requestAnimationFrame(sample);
+          return;
+        }
+        window.__rankedUiMetrics.mutations += window.__rankedUiObserver.takeRecords().length;
+        const durationMs = now - start;
+        resolve({
+          durationMs,
+          mutationsPerSecond: window.__rankedUiMetrics.mutations * 1_000 / durationMs,
+          stableCourseStage: window.__rankedUiMetrics.courseStage === document.querySelector("#course-stages")?.firstElementChild,
+          stableRoleCard: window.__rankedUiMetrics.roleCard === document.querySelector("#role-cards")?.firstElementChild,
+          stableMember: window.__rankedUiMetrics.member === document.querySelector("#members")?.firstElementChild,
+        });
+      };
+      requestAnimationFrame(sample);
+    });
   }));
   assert.ok(rankedUi.mutationsPerSecond <= 120, `ranked UI produced ${rankedUi.mutationsPerSecond} DOM mutations/sec`);
   assert.equal(rankedUi.stableCourseStage, true);
