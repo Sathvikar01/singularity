@@ -1,22 +1,17 @@
 import * as THREE from "three";
 import {
   CHALLENGE,
-  CHALLENGES,
-  challengeFor,
+  courseFor,
   finalAlignment,
   hazardX,
   platformCenter,
-  type Body,
   type ChallengeId,
-} from "../shared/physics";
+  type CoursePalette,
+} from "../shared/course.ts";
+import type { Body } from "../shared/physics";
 import { createCharacter, type CharacterRig } from "./character";
 
 const TEAM_COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
-const THEMES = [
-  { background: 0x12212b, fog: 0x12212b, floor: 0xcedbd5, dark: 0x273b45, accent: 0x96e9cd, hazard: 0xff806e },
-  { background: 0x071f2b, fog: 0x0c3543, floor: 0x6d91a1, dark: 0x163642, accent: 0x69d9ff, hazard: 0xffb45f },
-  { background: 0x210f1b, fog: 0x321523, floor: 0x6e4754, dark: 0x2c1b2b, accent: 0xff9b73, hazard: 0xe84c72 },
-] as const;
 
 type MovingPlatform = { mesh: THREE.Mesh; z: number };
 type CourseRig = {
@@ -31,8 +26,9 @@ type CourseRig = {
 
 export function createScene(container: HTMLElement) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(THEMES[0].background);
-  scene.fog = new THREE.FogExp2(THEMES[0].fog, 0.012);
+  const initialPalette = courseFor(CHALLENGE.Easy).palette;
+  scene.background = new THREE.Color(initialPalette.background);
+  scene.fog = new THREE.FogExp2(initialPalette.fog, 0.012);
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
   renderer.shadowMap.enabled = true;
@@ -101,28 +97,29 @@ export function createScene(container: HTMLElement) {
     return sprite;
   };
 
-  function addGate(group: THREE.Group, z: number, finish: boolean, palette: typeof THEMES[number]) {
+  function addGate(group: THREE.Group, z: number, finish: boolean, palette: CoursePalette) {
     const dark = material(palette.dark, 0.3, 0.52);
-    const accent = material(palette.accent, 0.25, 0.35);
+    const accent = material(palette.signal, 0.25, 0.35);
     for (const x of [-4, 4]) {
       makeBox(group, 0.3, 6, 0.3, x, 3, z, dark);
       makeBox(group, 0.08, 5.4, 0.34, x, 3, z - 0.01, accent);
     }
     makeBox(group, 8.3, 0.52, 0.42, 0, 6, z, dark);
-    makeLabel(group, finish ? "finish" : "checkpoint", 0, 5.7, z - 0.26, `#${palette.accent.toString(16).padStart(6, "0")}`, 3.4);
+    makeLabel(group, finish ? "finish" : "checkpoint", 0, 5.7, z - 0.26, `#${palette.signal.toString(16).padStart(6, "0")}`, 3.4);
   }
 
   function addStageLabels(group: THREE.Group, challenge: ChallengeId, color: string) {
-    challengeFor(challenge).stages.forEach((stage, index) => {
-      const previous = challengeFor(challenge).stages[index - 1];
+    const { stages } = courseFor(challenge);
+    stages.forEach((stage, index) => {
+      const previous = stages[index - 1];
       const z = index === 0 ? Math.max(2, stage.gate - 3) : Math.max(previous.gate + 2, stage.gate - 4);
       makeLabel(group, `${String(index + 1).padStart(2, "0")} / ${stage.name}`, 0, 4.9, z, color, 5.5);
     });
   }
 
-  function addBarriers(group: THREE.Group, challenge: ChallengeId, palette: typeof THEMES[number]) {
-    return challengeFor(challenge).stages.slice(0, -1).map(stage => {
-      const barrierMaterial = new THREE.MeshBasicMaterial({ color: palette.accent, transparent: true, opacity: 0.2, depthWrite: false });
+  function addBarriers(group: THREE.Group, challenge: ChallengeId, palette: CoursePalette) {
+    return courseFor(challenge).stages.slice(0, -1).map(stage => {
+      const barrierMaterial = new THREE.MeshBasicMaterial({ color: palette.signal, transparent: true, opacity: 0.2, depthWrite: false });
       return makeBox(group, 9.4, 3.4, 0.06, 0, 1.7, stage.gate, barrierMaterial);
     });
   }
@@ -140,10 +137,11 @@ export function createScene(container: HTMLElement) {
 
   function buildEasy(): CourseRig {
     const challenge = CHALLENGE.Easy;
-    const palette = THEMES[challenge];
+    const course = courseFor(challenge);
+    const palette = course.palette;
     const group = new THREE.Group();
     const floor = material(palette.floor), dark = material(palette.dark, 0.22, 0.48);
-    const accent = material(palette.accent, 0.18, 0.4), hazard = material(palette.hazard, 0.08, 0.55);
+    const accent = material(palette.signal, 0.18, 0.4), hazard = material(palette.hazard, 0.08, 0.55);
     for (const [z, depth] of [[1, 12], [21, 12], [46, 38]] as const) {
       makeBox(group, 9.2, 0.7, depth, 0, -0.4, z, floor);
       makeBox(group, 9.6, 0.2, depth + 0.3, 0, -0.85, z, dark);
@@ -151,18 +149,22 @@ export function createScene(container: HTMLElement) {
     }
     makeBox(group, 2.6, 0.4, 8, 0, -0.2, 11, dark);
     for (let z = 7; z < 15; z += 0.8) makeBox(group, 2.5, 0.04, 0.06, 0, 0.03, z, accent);
-    const pad = makeBox(group, 4, 0.08, 3, 0, 0.04, 25.7, accent);
-    makeLabel(group, "cargo drop", 0, 0.7, 26, "#ffffff", 2.8);
-    const relays = [5, 47].flatMap(z => [-0.9, 0.9].map(x => makeBox(group, 0.45, 0.45, 0.45, x, 2.05, z, material(0xffcc70, 0.3, 0.28))));
+    const payload = course.payloads[0];
+    const pad = makeBox(group, 4, 0.08, 3, payload.dock[0], 0.04, payload.dock[2], accent);
+    makeLabel(group, payload.label, payload.dock[0], 0.7, payload.dock[2] + 0.3, "#ffffff", 2.8);
+    const relayGates = course.stages.filter(stage => stage.kind === "relay" || stage.kind === "storm").map(stage => stage.gate);
+    const relays = relayGates.flatMap(z => [-0.9, 0.9].map(x => makeBox(group, 0.45, 0.45, 0.45, x, 2.05, z, material(0xffcc70, 0.3, 0.28))));
+    const switchGate = course.stages.find(stage => stage.kind === "switches")!.gate;
     const footPads = [-0.45, 0.45].map((x, index) => {
-      makeLabel(group, index ? "R" : "L", x, 0.8, 33, "#b7ffe2", 0.7);
-      return makeBox(group, 0.85, 0.06, 2.5, x, 0.05, 33, material(0x385c62));
+      makeLabel(group, index ? "R" : "L", x, 0.8, switchGate, "#b7ffe2", 0.7);
+      return makeBox(group, 0.85, 0.06, 2.5, x, 0.05, switchGate, material(0x385c62));
     });
-    const sweeper = makeBox(group, 0.62, 1.1, 7, 0, 1.1, 42.5, hazard);
-    makeBox(group, 9, 0.16, 0.3, 0, 0.1, 42.5, dark);
-    addGate(group, 60, true, palette);
-    addStageLabels(group, challenge, "#c5f8e9");
-    addSpaceDebris(group, dark, 65);
+    const sweeperDefinition = course.hazards[0];
+    const sweeper = makeBox(group, ...sweeperDefinition.size, 0, sweeperDefinition.y, sweeperDefinition.z, hazard);
+    makeBox(group, 9, 0.16, 0.3, 0, 0.1, sweeperDefinition.z, dark);
+    addGate(group, course.stages.at(-1)!.gate, true, palette);
+    addStageLabels(group, challenge, palette.label);
+    addSpaceDebris(group, dark, course.length, course.debrisSeed);
     group.userData.deliveryPad = pad;
     scene.add(group);
     return { group, barriers: addBarriers(group, challenge, palette), hazards: [sweeper], movingPlatforms: [], relays, footPads };
@@ -170,10 +172,11 @@ export function createScene(container: HTMLElement) {
 
   function buildMedium(): CourseRig {
     const challenge = CHALLENGE.Medium;
-    const palette = THEMES[challenge];
+    const course = courseFor(challenge);
+    const palette = course.palette;
     const group = new THREE.Group();
     const floor = material(palette.floor, 0.34, 0.5), dark = material(palette.dark, 0.5, 0.38);
-    const accent = material(palette.accent, 0.3, 0.3), hazard = material(palette.hazard, 0.25, 0.4);
+    const accent = material(palette.signal, 0.3, 0.3), hazard = material(palette.hazard, 0.25, 0.4);
     for (const [z, depth, width] of [[13.5, 37, 9.6], [41.5, 15, 4.3], [72.5, 13, 9.6], [99, 18, 9.6]] as const) {
       makeBox(group, width, 0.68, depth, 0, -0.42, z, floor);
       makeBox(group, width + 0.35, 0.18, depth + 0.2, 0, -0.85, z, dark);
@@ -188,21 +191,21 @@ export function createScene(container: HTMLElement) {
       for (const x of [-4.1, 4.1]) makeBox(group, 0.2, 2.72, 0.2, x, 1.36, z, dark);
     }
     makeLabel(group, "bend under blue", 0, 2.45, 15.5, "#d6f7ff", 3.2);
-    const hazards = [
-      makeBox(group, 0.65, 1.15, 4.2, 0, 1.1, 41, hazard),
-      makeBox(group, 0.65, 1.15, 3.2, 0, 1.1, 58, hazard),
-    ];
+    const hazards = course.hazards.map(definition => makeBox(group, ...definition.size, 0, definition.y, definition.z, hazard));
     const movingPlatforms: MovingPlatform[] = [];
-    for (const z of [82, 85.5, 89]) {
-      const mesh = makeBox(group, 3.35, 0.55, 3, 0, -0.28, z, floor);
-      makeBox(group, 9.2, 0.12, 0.18, 0, -0.7, z, dark);
-      movingPlatforms.push({ mesh, z });
+    for (const band of course.platformBands) {
+      for (const z of band.renderZ) {
+        const mesh = makeBox(group, ...band.renderSize, 0, band.renderY, z, floor);
+        makeBox(group, 9.2, 0.12, 0.18, 0, -0.7, z, dark);
+        movingPlatforms.push({ mesh, z });
+      }
     }
-    const pad = makeBox(group, 3, 0.08, 2.6, 0, 0.04, 76.2, accent);
-    makeLabel(group, "power cell dock", 0, 0.72, 76.2, "#e4fbff", 3);
-    addGate(group, 104, true, palette);
-    addStageLabels(group, challenge, "#ccefff");
-    addSpaceDebris(group, dark, 109, 1.3);
+    const payload = course.payloads[0];
+    const pad = makeBox(group, 3, 0.08, 2.6, payload.dock[0], 0.04, payload.dock[2], accent);
+    makeLabel(group, payload.label, payload.dock[0], 0.72, payload.dock[2], "#e4fbff", 3);
+    addGate(group, course.stages.at(-1)!.gate, true, palette);
+    addStageLabels(group, challenge, palette.label);
+    addSpaceDebris(group, dark, course.length, course.debrisSeed);
     group.userData.deliveryPad = pad;
     scene.add(group);
     return { group, barriers: addBarriers(group, challenge, palette), hazards, movingPlatforms, relays: [], footPads: [] };
@@ -210,10 +213,11 @@ export function createScene(container: HTMLElement) {
 
   function buildDifficult(): CourseRig {
     const challenge = CHALLENGE.Difficult;
-    const palette = THEMES[challenge];
+    const course = courseFor(challenge);
+    const palette = course.palette;
     const group = new THREE.Group();
     const floor = material(palette.floor, 0.42, 0.43), dark = material(palette.dark, 0.56, 0.34);
-    const accent = material(palette.accent, 0.4, 0.3), hazard = material(palette.hazard, 0.3, 0.38);
+    const accent = material(palette.signal, 0.4, 0.3), hazard = material(palette.hazard, 0.3, 0.38);
     for (const [z, depth, y] of [[2, 14, -0.4], [40.5, 11, -0.05], [68, 11, -0.4], [77, 7, -0.4], [89, 13, -0.4], [103, 18, -0.4]] as const) {
       makeBox(group, 9.4, 0.7, depth, 0, y, z, floor);
       makeBox(group, 9.7, 0.16, depth + 0.2, 0, y - 0.44, z, dark);
@@ -231,18 +235,16 @@ export function createScene(container: HTMLElement) {
       makeBox(group, 4.4, height, 2.85, index % 2 ? 0.15 : -0.15, height / 2 - 0.02, z, index % 2 ? accent : floor);
     }
     const movingPlatforms: MovingPlatform[] = [];
-    for (const z of [23, 27, 31.5, 48, 52.5, 57, 61]) {
-      const y = z < 35 ? 1.64 : 0.08;
-      const mesh = makeBox(group, 3.05, 0.55, 3.5, 0, y, z, floor);
-      const frame = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: palette.accent }));
-      mesh.add(frame);
-      movingPlatforms.push({ mesh, z });
+    for (const band of course.platformBands) {
+      for (const z of band.renderZ) {
+        const mesh = makeBox(group, ...band.renderSize, 0, band.renderY, z, floor);
+        const frame = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: palette.signal }));
+        mesh.add(frame);
+        movingPlatforms.push({ mesh, z });
+      }
     }
-    const hazards = [
-      makeBox(group, 0.7, 1.4, 3, 0, 3.1, 29, hazard),
-      makeBox(group, 0.7, 1.25, 3, 0, 1.25, 54, hazard),
-    ];
-    for (const [x, z, title] of [[-1.55, 70.5, "CORE A"], [1.55, 92.2, "CORE B"]] as const) {
+    const hazards = course.hazards.map(definition => makeBox(group, ...definition.size, 0, definition.y, definition.z, hazard));
+    for (const { dock: [x, , z], label: title } of course.payloads) {
       const socket = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.12, 12, 32), accent);
       socket.rotation.x = Math.PI / 2;
       socket.position.set(x, 0.12, z);
@@ -254,16 +256,17 @@ export function createScene(container: HTMLElement) {
     for (let index = 0; index < 3; index++) {
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(1.45 + index * 0.5, 0.06 + index * 0.015, 10, 64),
-        new THREE.MeshStandardMaterial({ color: index === 1 ? palette.hazard : palette.accent, emissive: index === 1 ? palette.hazard : palette.accent, emissiveIntensity: 0.8 }),
+        new THREE.MeshStandardMaterial({ color: index === 1 ? palette.hazard : palette.signal, emissive: index === 1 ? palette.hazard : palette.signal, emissiveIntensity: 0.8 }),
       );
       ring.rotation.y = index * 0.75;
       finalRing.add(ring);
     }
-    finalRing.position.set(0, 2.4, 108);
+    const finalGate = course.stages.at(-1)!.gate;
+    finalRing.position.set(0, 2.4, finalGate);
     group.add(finalRing);
-    makeLabel(group, "wait for align", 0, 5.35, 105.5, "#ffd6c4", 4.2);
-    addStageLabels(group, challenge, "#ffd3c0");
-    addSpaceDebris(group, dark, 113, 2.5);
+    makeLabel(group, "wait for align", 0, 5.35, finalGate - 2.5, "#ffd6c4", 4.2);
+    addStageLabels(group, challenge, palette.label);
+    addSpaceDebris(group, dark, course.length, course.debrisSeed);
     scene.add(group);
     return { group, barriers: addBarriers(group, challenge, palette), hazards, movingPlatforms, relays, footPads: [], finalRing };
   }
@@ -289,14 +292,14 @@ export function createScene(container: HTMLElement) {
   let activeChallenge: ChallengeId = CHALLENGE.Easy;
 
   function showChallenge(challenge: number) {
-    const next = challenge === 1 || challenge === 2 ? challenge : CHALLENGE.Easy;
+    const next = courseFor(challenge).id;
     activeChallenge = next;
     courses.forEach((course, index) => { course.group.visible = index === next; });
-    const theme = THEMES[next];
+    const theme = courseFor(next).palette;
     (scene.background as THREE.Color).setHex(theme.background);
     (scene.fog as THREE.FogExp2).color.setHex(theme.fog);
-    courseLight.color.setHex(theme.accent);
-    hemisphere.color.setHex(next === CHALLENGE.Difficult ? 0xffc2b0 : next === CHALLENGE.Medium ? 0xc9f7ff : 0xd7f8ff);
+    courseLight.color.setHex(theme.signal);
+    hemisphere.color.setHex(theme.hemisphere);
   }
   showChallenge(activeChallenge);
 
@@ -313,7 +316,7 @@ export function createScene(container: HTMLElement) {
     course.relays.forEach((relay, index) => {
       relay.rotation.y = time * (index % 2 ? -1 : 1);
       const material = relay.material as THREE.MeshStandardMaterial;
-      material.emissive?.setHex(body && body.charge > 0 ? THEMES[activeChallenge].accent : 0x4b2e19);
+      material.emissive?.setHex(body && body.charge > 0 ? courseFor(activeChallenge).palette.signal : 0x4b2e19);
       material.emissiveIntensity = body ? 0.25 + body.charge : 0.25;
     });
     course.footPads.forEach((mesh, index) => {
@@ -356,6 +359,6 @@ export function createScene(container: HTMLElement) {
     update,
     setFollow(value: boolean) { follow = value; },
     setChallenge(value: number) { showChallenge(value); },
-    getChallenge() { return CHALLENGES[activeChallenge]; },
+    getChallenge() { return courseFor(activeChallenge); },
   };
 }
