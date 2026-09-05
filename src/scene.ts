@@ -12,6 +12,7 @@ import {
 import type { Body } from "../shared/physics";
 import { createCharacter, type CharacterRig } from "./character";
 import { dampingAlpha } from "./body-pose";
+import type { GameFeedbackEvent, GameFeedbackKind } from "./game-feedback";
 
 const TEAM_COLORS = [0xff806e, 0x91dfc5, 0xa5a0ff, 0xffd17d];
 
@@ -54,6 +55,48 @@ export function createScene(container: HTMLElement) {
   const courseLight = new THREE.PointLight(0x93ffdc, 42, 42);
   courseLight.position.set(0, 8, 7);
   scene.add(courseLight);
+
+  let cameraTrauma = 0;
+  const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+  let reducedMotion = motionPreference.matches;
+  motionPreference.addEventListener?.("change", event => {
+    reducedMotion = event.matches;
+    if (reducedMotion) cameraTrauma = 0;
+  });
+
+  const particleLimit = 96;
+  const particlePositions = new Float32Array(particleLimit * 3);
+  const particleColors = new Float32Array(particleLimit * 3);
+  const particleBaseColors = new Float32Array(particleLimit * 3);
+  const particleVelocities = new Float32Array(particleLimit * 3);
+  const particleAges = new Float32Array(particleLimit);
+  const particleLives = new Float32Array(particleLimit);
+  const particleActive = new Uint8Array(particleLimit);
+  for (let index = 0; index < particleLimit; index++) particlePositions[index * 3 + 1] = -1_000;
+  const particleGeometry = new THREE.BufferGeometry();
+  const particlePositionAttribute = new THREE.BufferAttribute(particlePositions, 3).setUsage(THREE.DynamicDrawUsage);
+  const particleColorAttribute = new THREE.BufferAttribute(particleColors, 3).setUsage(THREE.DynamicDrawUsage);
+  particleGeometry.setAttribute("position", particlePositionAttribute);
+  particleGeometry.setAttribute("color", particleColorAttribute);
+  const particles = new THREE.Points(
+    particleGeometry,
+    new THREE.PointsMaterial({
+      size: 0.18,
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  particles.frustumCulled = false;
+  particles.visible = false;
+  scene.add(particles);
+  const particleColor = new THREE.Color();
+  let particleCursor = 0;
+  let particleSerial = 0;
+  let activeParticles = 0;
 
   const material = (color: number, metalness = 0.05, roughness = 0.6) =>
     new THREE.MeshStandardMaterial({ color, metalness, roughness });
@@ -292,8 +335,115 @@ export function createScene(container: HTMLElement) {
   const vector = new THREE.Vector3();
   const focus = new THREE.Vector3();
   const look = new THREE.Vector3(0, 1, 6);
+  const shakenLook = new THREE.Vector3();
+  const cameraBase = camera.position.clone();
   let follow = false;
   let activeChallenge: ChallengeId = CHALLENGE.Easy;
+  let shakeTime = 0;
+
+  function particleSettings(kind: GameFeedbackKind) {
+    switch (kind) {
+      case "step": return [3, 0.65, 0.34] as const;
+      case "lift": return [6, 1.05, 0.46] as const;
+      case "land": return [10, 1.4, 0.55] as const;
+      case "grip": return [5, 0.75, 0.38] as const;
+      case "impact": return [16, 3.1, 0.72] as const;
+      case "stage": return [22, 2.05, 0.9] as const;
+      case "fall": return [18, 2.6, 0.82] as const;
+      case "mistake": return [14, 2.2, 0.68] as const;
+      case "finish": return [32, 2.8, 1.15] as const;
+    }
+  }
+
+  function feedbackColor(kind: GameFeedbackKind) {
+    const palette = courseFor(activeChallenge).palette;
+    return kind === "impact" || kind === "fall" || kind === "mistake"
+      ? palette.hazard
+      : palette.signal;
+  }
+
+  function spawnFeedback(event: GameFeedbackEvent) {
+    if (reducedMotion) return;
+    const settings = particleSettings(event.kind);
+    let count: number = settings[0];
+    const speed = settings[1], life = settings[2];
+    particleColor.setHex(feedbackColor(event.kind));
+    for (let emitted = 0; emitted < count; emitted++) {
+      const index = particleCursor;
+      particleCursor = (particleCursor + 1) % particleLimit;
+      if (!particleActive[index]) activeParticles++;
+      particleActive[index] = 1;
+      particleAges[index] = 0;
+      const variation = 0.78 + ((particleSerial * 37) % 23) / 50;
+      particleLives[index] = life * variation;
+      const offset = index * 3;
+      const angle = particleSerial++ * 2.399963229728653;
+      const radial = 0.35 + ((particleSerial * 17) % 13) / 20;
+      const impulse = speed * Math.max(0.35, event.strength) * radial;
+      particlePositions[offset] = event.x;
+      particlePositions[offset + 1] = event.y + 0.08;
+      particlePositions[offset + 2] = event.z;
+      particleVelocities[offset] = Math.cos(angle) * impulse;
+      particleVelocities[offset + 1] = speed * (0.38 + radial * 0.44);
+      particleVelocities[offset + 2] = Math.sin(angle) * impulse;
+      particleBaseColors[offset] = particleColor.r;
+      particleBaseColors[offset + 1] = particleColor.g;
+      particleBaseColors[offset + 2] = particleColor.b;
+      particleColors[offset] = particleColor.r;
+      particleColors[offset + 1] = particleColor.g;
+      particleColors[offset + 2] = particleColor.b;
+    }
+    particles.visible = true;
+    particlePositionAttribute.needsUpdate = true;
+    particleColorAttribute.needsUpdate = true;
+  }
+
+  function updateParticles(deltaSeconds: number) {
+    if (activeParticles === 0) {
+      particles.visible = false;
+      return;
+    }
+    const delta = Math.min(Math.max(deltaSeconds, 0), 0.1);
+    for (let index = 0; index < particleLimit; index++) {
+      if (!particleActive[index]) continue;
+      particleAges[index] += delta;
+      const offset = index * 3;
+      if (particleAges[index] >= particleLives[index]) {
+        particleActive[index] = 0;
+        activeParticles--;
+        particlePositions[offset + 1] = -1_000;
+        particleColors[offset] = particleColors[offset + 1] = particleColors[offset + 2] = 0;
+        continue;
+      }
+      particleVelocities[offset + 1] -= 3.2 * delta;
+      particlePositions[offset] += particleVelocities[offset] * delta;
+      particlePositions[offset + 1] += particleVelocities[offset + 1] * delta;
+      particlePositions[offset + 2] += particleVelocities[offset + 2] * delta;
+      const fade = 1 - particleAges[index] / particleLives[index];
+      particleColors[offset] = particleBaseColors[offset] * fade;
+      particleColors[offset + 1] = particleBaseColors[offset + 1] * fade;
+      particleColors[offset + 2] = particleBaseColors[offset + 2] * fade;
+    }
+    particlePositionAttribute.needsUpdate = true;
+    particleColorAttribute.needsUpdate = true;
+  }
+
+  function addTrauma(event: GameFeedbackEvent) {
+    if (reducedMotion) {
+      cameraTrauma = 0;
+      return;
+    }
+    const weight = event.kind === "impact" ? 0.48
+      : event.kind === "fall" ? 0.72
+        : event.kind === "mistake" ? 0.36
+          : event.kind === "finish" ? 0.3
+            : event.kind === "land" ? 0.18
+              : event.kind === "stage" ? 0.12
+                : event.kind === "lift" ? 0.07
+                  : event.kind === "grip" ? 0.025
+                    : 0.012;
+    cameraTrauma = Math.min(1, cameraTrauma + weight * event.strength);
+  }
 
   function showChallenge(challenge: number) {
     const next = courseFor(challenge).id;
@@ -341,7 +491,7 @@ export function createScene(container: HTMLElement) {
 
     if (body && selectedRig && follow) {
       selectedRig.getFocus(focus);
-      camera.position.lerp(
+      cameraBase.lerp(
         vector.set(focus.x + 10, focus.y + 8.5, focus.z - 15),
         dampingAlpha(6.5, deltaSeconds),
       );
@@ -351,10 +501,22 @@ export function createScene(container: HTMLElement) {
       );
     } else {
       const previewZ = activeChallenge === CHALLENGE.Difficult ? -17 : -19;
-      camera.position.lerp(vector.set(14, 14, previewZ), dampingAlpha(3.5, deltaSeconds));
+      cameraBase.lerp(vector.set(14, 14, previewZ), dampingAlpha(3.5, deltaSeconds));
       look.lerp(vector.set(0, 1.2, 8), dampingAlpha(4, deltaSeconds));
     }
-    camera.lookAt(look);
+    updateParticles(deltaSeconds);
+    cameraTrauma *= Math.exp(-7.5 * Math.min(Math.max(deltaSeconds, 0), 0.1));
+    shakeTime += Math.min(Math.max(deltaSeconds, 0), 0.1) * 32;
+    const shake = reducedMotion ? 0 : cameraTrauma * cameraTrauma;
+    camera.position.copy(cameraBase);
+    shakenLook.copy(look);
+    if (shake > 0.0001) {
+      camera.position.x += Math.sin(shakeTime * 1.17) * shake * 0.24;
+      camera.position.y += Math.sin(shakeTime * 1.73 + 1.4) * shake * 0.13;
+      shakenLook.x += Math.sin(shakeTime * 0.91 + 2.1) * shake * 0.18;
+      shakenLook.y += Math.sin(shakeTime * 1.31) * shake * 0.08;
+    }
+    camera.lookAt(shakenLook);
     renderer.render(scene, camera);
   }
 
@@ -372,5 +534,9 @@ export function createScene(container: HTMLElement) {
     setFollow(value: boolean) { follow = value; },
     setChallenge(value: number) { showChallenge(value); },
     getChallenge() { return courseFor(activeChallenge); },
+    feedback(event: GameFeedbackEvent) {
+      spawnFeedback(event);
+      addTrauma(event);
+    },
   };
 }

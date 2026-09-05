@@ -37,10 +37,11 @@ Desktop keyboard and mobile touch controls are supported. Up to four colored tea
 
 ## Architecture
 
-- `shared/physics.ts`: deterministic 30 Hz simulation, challenge definitions, 3/5-player limb mapping, dual-hand objects, dynamic platforms, penalties, checkpoints and practice teammates.
+- `shared/physics.ts`: deterministic 30 Hz simulation, 3/5-player limb mapping, target-velocity locomotion, dynamic support carrying, contact-edge impacts, dual-hand objects, penalties, checkpoints and practice teammates.
 - `spacetimedb/src/index.ts`: authoritative identity-based role assignments, bounded inputs, match lifecycle and ranked results.
 - `src/main.ts`: lobby, role-specific controls, objective progress, reconnects, practice and results.
 - `src/scene.ts`: three procedural Three.js environments, character bodies, objects, gates, moving hazards, unstable platforms, lighting and camera.
+- `src/game-feedback.ts`: presentation-only event tracking for pooled particles, procedural cues and smooth camera reactions.
 - `src/module_bindings/`: generated client protocol.
 
 Clients submit only x/z/action. The server derives the role from its player row, rejects stale protocols or mismatched room configurations, expires inputs after 500 ms, and records exact finish times using server timestamps plus simulation penalties. Room, team and result rows carry challenge and crew size; ruleset 4 records never mix with incompatible results.

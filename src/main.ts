@@ -1,5 +1,6 @@
 import "./style.css";
 import { createScene } from "./scene";
+import { GameFeedbackTracker, type GameFeedbackEvent } from "./game-feedback";
 import {
   CHALLENGE,
   CHALLENGES,
@@ -162,6 +163,9 @@ let ready = false;
 let allowRankedAdoption = false;
 let muted = false;
 let audio: AudioContext | undefined;
+let audioMaster: GainNode | undefined;
+let nextVoice = 0;
+const audioVoices: Array<{ oscillator: OscillatorNode; gain: GainNode }> = [];
 const renderBodies = new Map<number, Body>();
 const keys = new Set<string>();
 let toastTimer: ReturnType<typeof setTimeout>;
@@ -172,21 +176,73 @@ function toast(message: string) {
   toastTimer = setTimeout(() => { $("toast").textContent = ""; }, 5000);
 }
 
-function beep(frequency = 440) {
+function beep(
+  frequency = 440,
+  duration = 0.3,
+  volume = 0.045,
+  wave: OscillatorType = "sine",
+  endRatio = 1.5,
+) {
   if (muted) return;
   try {
-    audio ??= new AudioContext();
-    void audio.resume();
-    const oscillator = audio.createOscillator(), gain = audio.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(frequency, audio.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(frequency * 1.5, audio.currentTime + 0.12);
-    gain.gain.setValueAtTime(0.045, audio.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.3);
-    oscillator.connect(gain).connect(audio.destination);
-    oscillator.start(); oscillator.stop(audio.currentTime + 0.3);
+    const context = ensureAudio();
+    void context.resume();
+    const voice = audioVoices[nextVoice++ % audioVoices.length];
+    const now = context.currentTime;
+    voice.oscillator.type = wave;
+    voice.oscillator.frequency.cancelScheduledValues(now);
+    voice.oscillator.frequency.setValueAtTime(frequency, now);
+    voice.oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, frequency * endRatio), now + duration * 0.45);
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setValueAtTime(0.0001, now);
+    voice.gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume), now + 0.006);
+    voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
   } catch {}
 }
+
+function ensureAudio() {
+  if (audio) return audio;
+  audio = new AudioContext();
+  audioMaster = audio.createGain();
+  audioMaster.gain.value = muted ? 0 : 1;
+  audioMaster.connect(audio.destination);
+  for (let index = 0; index < 6; index++) {
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+    gain.gain.value = 0.0001;
+    oscillator.connect(gain).connect(audioMaster);
+    oscillator.start();
+    audioVoices.push({ oscillator, gain });
+  }
+  return audio;
+}
+
+function unlockAudio() {
+  if (muted) return;
+  try { void ensureAudio().resume(); } catch {}
+}
+
+window.addEventListener("pointerdown", unlockAudio, { once: true, capture: true });
+window.addEventListener("keydown", unlockAudio, { once: true, capture: true });
+
+function playGameFeedback(event: GameFeedbackEvent) {
+  switch (event.kind) {
+    case "step": beep(118, 0.055, 0.009 * event.strength, "triangle", 0.82); break;
+    case "lift": beep(210, 0.11, 0.018, "triangle", 1.38); break;
+    case "land": beep(92, 0.13, 0.025 * event.strength, "sine", 0.72); break;
+    case "grip": beep(510, 0.08, 0.014, "sine", 1.2); break;
+    case "impact": beep(86, 0.2, 0.042 * event.strength, "sawtooth", 0.56); break;
+    case "stage": beep(650, 0.28, 0.042, "sine", 1.5); break;
+    case "fall": beep(180, 0.34, 0.045, "triangle", 0.48); break;
+    case "mistake": beep(130, 0.3, 0.046, "square", 0.62); break;
+    case "finish": beep(820, 0.48, 0.05, "sine", 1.5); break;
+  }
+}
+
+const gameFeedback = new GameFeedbackTracker(event => {
+  scene.feedback(event);
+  playGameFeedback(event);
+});
 
 function modal(id: string) {
   const dialog = $(id);
@@ -341,13 +397,10 @@ function handleSignals(signals: readonly RaceSessionSignal[]) {
         beep();
       }
     } else if (signal.type === "stage-cleared") {
-      beep(650);
       toast(challenge.stages[signal.stage]?.hint ?? `All ${challenge.stages.length} objectives cleared!`);
     } else if (signal.type === "fell") {
-      beep(180);
       toast(`Back to your checkpoint. +${challenge.fallPenaltyMs / 1000} second fall penalty.`);
     } else if (signal.type === "timing-missed") {
-      beep(130);
       toast(`Missed launch window. +${challenge.timingPenaltyMs / 1000} seconds. Reset and resync.`);
     } else if (signal.type === "completed") {
       $("finish-time").textContent = formatTime(signal.finishMs);
@@ -371,7 +424,9 @@ function startPractice() {
 
 $("practice").onclick = startPractice;
 $("sound").onclick = () => {
-  muted = !muted; $("sound").textContent = muted ? "Sound off" : "Sound on"; toast(muted ? "Sound off" : "Sound on");
+  muted = !muted;
+  if (audio && audioMaster) audioMaster.gain.setTargetAtTime(muted ? 0 : 1, audio.currentTime, 0.012);
+  $("sound").textContent = muted ? "Sound off" : "Sound on"; toast(muted ? "Sound off" : "Sound on");
 };
 $("help").onclick = () => modal("help-dialog");
 $("exit").onclick = () => {
@@ -625,6 +680,8 @@ function frame(timestamp: number) {
     ? `${view.room.code}:${view.room.matchId ?? "lobby"}`
     : `${view.mode}:${view.setup.challenge}:${view.setup.crewSize}`;
   scene.update(renderBodies, view.room?.team ?? 0, attemptId, timestamp / 1000, delta);
+  if (view.playing) gameFeedback.update(attemptId, body);
+  else gameFeedback.reset();
   requestAnimationFrame(frame);
 }
 
