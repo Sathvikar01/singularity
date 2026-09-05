@@ -20,7 +20,16 @@ import {
   type Input,
 } from "../shared/physics";
 import { createRaceSession, type RaceSessionSignal, type RaceSessionView } from "./race-session";
-import { connect, readRankedProjection } from "./network";
+import {
+  DATABASE,
+  SERVER,
+  connect,
+  normalizeRoomCode,
+  readRankedProjection,
+  type GameNetwork,
+  type LeaderboardScope,
+  type RoomUpdateKind,
+} from "./network";
 import type { DbConnection } from "./module_bindings";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -168,8 +177,11 @@ let leaderboardChallenge: ChallengeId = CHALLENGE.Easy;
 let leaderboardCrew: CrewSize = 5;
 const race = createRaceSession();
 let conn: DbConnection | undefined;
+let gameNetwork: GameNetwork | undefined;
 let ready = false;
 let allowRankedAdoption = false;
+let reconnectAssignment = false;
+const rememberedRoomKey = `singularity-room-${SERVER}/${DATABASE}`;
 let muted = false;
 let audio: AudioContext | undefined;
 let audioMaster: GainNode | undefined;
@@ -394,6 +406,8 @@ function handleSignals(signals: readonly RaceSessionSignal[]) {
     const challenge = challengeFor(view.setup.challenge);
     if (signal.type === "leave-ranked") {
       allowRankedAdoption = false;
+      reconnectAssignment = false;
+      sessionStorage.removeItem(rememberedRoomKey);
       if (conn) void conn.reducers.leave({}).catch(() => {});
     } else if (signal.type === "play-started") {
       enter(view);
@@ -462,23 +476,66 @@ function adoptRoomConfig(challenge: number, crewSize: number) {
   scene.setChallenge(race.view(Date.now()).setup.challenge); updateModeControls(); drawRoles(); updateCourseUI(); updateHelp();
 }
 
+const RefreshArea = {
+  Simulation: 1,
+  Structure: 2,
+  Leaderboard: 4,
+  All: 7,
+} as const;
+let queuedRefreshAreas = 0;
+let refreshQueued = false;
+
+function scheduleRefresh(areas: number) {
+  queuedRefreshAreas |= areas;
+  if (refreshQueued) return;
+  refreshQueued = true;
+  queueMicrotask(() => {
+    refreshQueued = false;
+    const pending = queuedRefreshAreas;
+    queuedRefreshAreas = 0;
+    refresh(pending);
+  });
+}
+
+const leaderboardScope = (): LeaderboardScope => ({
+  challenge: leaderboardChallenge,
+  crewSize: leaderboardCrew,
+});
+const isCurrentLeaderboard = (scope: LeaderboardScope) =>
+  scope.challenge === leaderboardChallenge && scope.crewSize === leaderboardCrew;
+
 function ensureConnection() {
   if (ready) return;
-  if (conn) conn.disconnect();
+  gameNetwork?.disconnect();
+  conn = undefined;
   $("connection").textContent = "CONNECTING"; $("network-error").textContent = "Connecting to SpacetimeDB…";
-  conn = connect(c => {
-    conn = c; ready = true; $("connection").textContent = "SPACETIMEDB CONNECTED"; $("network-error").textContent = "";
-    const me = c.identity && c.db.player.id.find(c.identity);
-    if (me && race.view(Date.now()).mode !== "practice") {
-      const projection = readRankedProjection(c, me.room);
-      if (projection) handleSignals(race.synchronize(projection, "adopt"));
-      ($("code") as HTMLInputElement).value = me.room; ($("name") as HTMLInputElement).value = me.name;
-      ($("team") as HTMLSelectElement).value = String(me.team);
-      const setup = race.view(Date.now()).setup;
-      if (!me.online) void c.reducers.join({ code: me.room, name: me.name, teamNumber: me.team, role: me.role, challenge: setup.challenge, crewSize: setup.crewSize, ruleset: RULESET }).catch(error => toast(String(error)));
-    }
-    refresh();
-  }, refresh, connectionError);
+  gameNetwork = connect({
+    ready: network => {
+      gameNetwork = network;
+      conn = network.connection;
+      ready = true;
+      $("connection").textContent = "SPACETIMEDB CONNECTED";
+      $("network-error").textContent = "";
+      const me = conn.identity && conn.db.player.id.find(conn.identity);
+      if (me && race.view(Date.now()).mode !== "practice") {
+        ($("code") as HTMLInputElement).value = me.room;
+        ($("name") as HTMLInputElement).value = me.name;
+        ($("team") as HTMLSelectElement).value = String(me.team);
+        reconnectAssignment = true;
+        sessionStorage.setItem(rememberedRoomKey, me.room);
+        network.setRoom(me.room);
+      } else network.setRoom(($("code") as HTMLInputElement).value);
+      refresh(RefreshArea.All);
+    },
+    roomData: (_code: string, kind: RoomUpdateKind) => scheduleRefresh(
+      kind === "structure" ? RefreshArea.Structure | RefreshArea.Simulation : RefreshArea.Simulation,
+    ),
+    leaderboardData: scope => {
+      if (isCurrentLeaderboard(scope)) scheduleRefresh(RefreshArea.Leaderboard);
+    },
+    error: connectionError,
+  });
+  gameNetwork.setRoom(($("code") as HTMLInputElement).value);
 }
 
 $("room-panel").onclick = () => { if (race.view(Date.now()).mode === "practice") $("exit").click(); modal("lobby"); if (!ready) ensureConnection(); };
@@ -486,8 +543,11 @@ $("open-lobby").onclick = () => { modal("lobby"); ensureConnection(); };
 $("leaders").onclick = () => {
   const setup = race.view(Date.now()).setup;
   leaderboardChallenge = setup.challenge; leaderboardCrew = setup.crewSize; updateLeaderboardFilters();
-  modal("leader-dialog"); ensureConnection(); refresh();
+  modal("leader-dialog"); ensureConnection();
+  gameNetwork?.setLeaderboard(leaderboardScope());
+  refresh(RefreshArea.Leaderboard);
 };
+$("leader-dialog").addEventListener("close", () => gameNetwork?.setLeaderboard());
 $("invite").onclick = async () => {
   const url = new URL(location.href);
   url.searchParams.set("room", ($("code") as HTMLInputElement).value.toUpperCase());
@@ -504,7 +564,14 @@ function syncKnownRoom() {
     $("room-contract").textContent = `ROOM SETUP · ${challengeFor(room.challenge).difficulty} / ${challengeFor(room.challenge).name} · ${room.crewSize} pilots`;
   }
 }
-$("code").addEventListener("input", syncKnownRoom);
+let roomScopeTimer: ReturnType<typeof setTimeout>;
+$("code").addEventListener("input", () => {
+  syncKnownRoom();
+  clearTimeout(roomScopeTimer);
+  roomScopeTimer = setTimeout(() => {
+    if (!joinedRoom()) gameNetwork?.setRoom(($("code") as HTMLInputElement).value);
+  }, 150);
+});
 $("part").addEventListener("change", event => selectRole(Number((event.currentTarget as HTMLSelectElement).value)));
 
 $("join").onclick = async () => {
@@ -519,8 +586,10 @@ $("join").onclick = async () => {
     const role = Number(($("part") as HTMLSelectElement).value);
     race.dispatch({ type: "select-role", role });
     allowRankedAdoption = true;
+    gameNetwork?.setRoom(code);
     await conn!.reducers.join({ code, name, teamNumber: Number(($("team") as HTMLSelectElement).value), role, challenge: setup.challenge, crewSize: setup.crewSize, ruleset: RULESET });
-    refresh(); beep();
+    sessionStorage.setItem(rememberedRoomKey, code);
+    refresh(RefreshArea.All); beep();
   } catch (error) { allowRankedAdoption = false; $("network-error").textContent = String(error); }
 };
 $("start").onclick = async () => { try { await conn!.reducers.start({}); } catch (error) { $("network-error").textContent = String(error); } };
@@ -538,63 +607,106 @@ function updateLeaderboardFilters() {
   $("leader-description").textContent = `${leaderboardCrew}-player ${challenge.difficulty} records · ${challenge.name} · Lower is better · Millisecond precision`;
 }
 document.querySelectorAll<HTMLButtonElement>("[data-leader-crew]").forEach(button => {
-  button.onclick = () => { const size = Number(button.dataset.leaderCrew); if (isCrewSize(size)) leaderboardCrew = size; updateLeaderboardFilters(); refresh(); };
+  button.onclick = () => {
+    const size = Number(button.dataset.leaderCrew);
+    if (isCrewSize(size)) leaderboardCrew = size;
+    updateLeaderboardFilters(); gameNetwork?.setLeaderboard(leaderboardScope()); refresh(RefreshArea.Leaderboard);
+  };
 });
 document.querySelectorAll<HTMLButtonElement>("[data-leader-challenge]").forEach(button => {
-  button.onclick = () => { const challenge = Number(button.dataset.leaderChallenge); if (isChallenge(challenge)) leaderboardChallenge = challenge; updateLeaderboardFilters(); refresh(); };
+  button.onclick = () => {
+    const challenge = Number(button.dataset.leaderChallenge);
+    if (isChallenge(challenge)) leaderboardChallenge = challenge;
+    updateLeaderboardFilters(); gameNetwork?.setLeaderboard(leaderboardScope()); refresh(RefreshArea.Leaderboard);
+  };
 });
 
-function refresh() {
-  if (!ready || !conn) return;
+function synchronizeRankedRoom() {
+  if (!conn) return race.view(Date.now());
   const projection = readRankedProjection(conn);
   const before = race.view(Date.now());
   if (projection && before.mode !== "practice") {
     const sameRoom = before.mode === "ranked" && before.room?.code === projection.room.code;
-    if (sameRoom || allowRankedAdoption) {
+    if (sameRoom || allowRankedAdoption || reconnectAssignment) {
       handleSignals(race.synchronize(projection, sameRoom ? "update" : "adopt"));
       allowRankedAdoption = false;
     }
-  }
-  const view = race.view(Date.now());
-  if (view.mode === "ranked" && view.room) {
-    const { challenge: selectedChallenge, crewSize: selectedCrew } = view.setup;
-    const roomCode = view.room.code;
-    const myTeam = view.room.team;
-    scene.setChallenge(selectedChallenge);
-    updateCourseUI(); updateHelp();
-    drawRoles();
-    const roles = rolesFor(selectedCrew);
-    const members = view.members;
-    $("members").replaceChildren(...members.map(player => {
-      const element = document.createElement("div");
-      element.textContent = `T${player.team + 1} · ${roles[player.role]?.name ?? "Unknown role"} — ${player.name}${player.online ? "" : " · DISCONNECTED / RESERVED"}`;
-      return element;
-    }));
-    $("start").hidden = !view.room.isHost;
-    $("start").textContent = view.phase === "finished" ? "Race again" : "Start race";
-    roles.forEach((_, index) => { $("pilot-" + index).textContent = members.find(player => player.team === myTeam && player.role === index)?.name || "NEEDED BEFORE START"; });
-    const locked = view.roleLocked;
-    ($("join") as HTMLButtonElement).disabled = locked;
-    for (const id of ["team", "code", "name"]) ($(id) as HTMLInputElement | HTMLSelectElement).disabled = locked;
-    ($("start") as HTMLButtonElement).disabled = !view.canStart;
-    $("start").title = view.room.crewReady ? `All ${selectedCrew} roles connected` : `Every active team needs ${selectedCrew} connected pilots`;
-    updateModeControls();
-
-    if (view.playing) {
-      $("mode-label").textContent = `${challengeFor(selectedChallenge).difficulty.toUpperCase()} · TEAM ${myTeam + 1} / ROOM ${roomCode}`;
-      $("race-status").textContent = view.phase.toUpperCase();
-      const teams = [...view.teams].sort((a, b) => (a.finishMs || Infinity) - (b.finishMs || Infinity));
-      $("standings").replaceChildren(...teams.map(team => {
-        const element = document.createElement("div");
-        element.textContent = `TEAM ${team.number + 1} · ${team.finishMs ? formatTime(team.finishMs) : `${team.body.stage}/${challengeFor(team.body.challenge).stages.length} objectives`}`;
-        return element;
-      }));
+    if (reconnectAssignment) {
+      const me = conn.identity && conn.db.player.id.find(conn.identity);
+      reconnectAssignment = false;
+      if (me) {
+        void conn.reducers.join({
+          code: projection.room.code,
+          name: me.name,
+          teamNumber: projection.assignment.team,
+          role: projection.assignment.role,
+          challenge: projection.room.challenge,
+          crewSize: projection.room.crewSize,
+          ruleset: RULESET,
+        }).catch(error => toast(String(error)));
+      }
     }
   }
+  return race.view(Date.now());
+}
 
+function renderRankedStructure(view: RaceSessionView) {
+  if (view.mode !== "ranked" || !view.room) return;
+  const { challenge: selectedChallenge, crewSize: selectedCrew } = view.setup;
+  const roomCode = view.room.code;
+  const myTeam = view.room.team;
+  scene.setChallenge(selectedChallenge);
+  updateCourseUI(); updateHelp(); drawRoles();
+  const roles = rolesFor(selectedCrew);
+  const members = view.members;
+  $("members").replaceChildren(...members.map(player => {
+    const element = document.createElement("div");
+    element.textContent = `T${player.team + 1} · ${roles[player.role]?.name ?? "Unknown role"} — ${player.name}${player.online ? "" : " · DISCONNECTED / RESERVED"}`;
+    return element;
+  }));
+  $("start").hidden = !view.room.isHost;
+  setText($("start"), view.phase === "finished" ? "Race again" : "Start race");
+  roles.forEach((_, index) => {
+    setText($("pilot-" + index), members.find(player => player.team === myTeam && player.role === index)?.name || "NEEDED BEFORE START");
+  });
+  const locked = view.roleLocked;
+  ($("join") as HTMLButtonElement).disabled = locked;
+  for (const id of ["team", "code", "name"]) ($(id) as HTMLInputElement | HTMLSelectElement).disabled = locked;
+  ($("start") as HTMLButtonElement).disabled = !view.canStart;
+  $("start").title = view.room.crewReady ? `All ${selectedCrew} roles connected` : `Every active team needs ${selectedCrew} connected pilots`;
+  updateModeControls();
+  if (view.playing) {
+    setText($("mode-label"), `${challengeFor(selectedChallenge).difficulty.toUpperCase()} · TEAM ${myTeam + 1} / ROOM ${roomCode}`);
+    setText($("race-status"), view.phase.toUpperCase());
+  }
+}
+
+function renderStandings(view: RaceSessionView) {
+  if (view.mode !== "ranked" || !view.playing) return;
+  const labels = [...view.teams]
+    .sort((a, b) => (a.finishMs || Infinity) - (b.finishMs || Infinity))
+    .map(team => `TEAM ${team.number + 1} · ${team.finishMs ? formatTime(team.finishMs) : `${team.body.stage}/${challengeFor(team.body.challenge).stages.length} objectives`}`);
+  const container = $("standings");
+  if (container.children.length !== labels.length) {
+    container.replaceChildren(...labels.map(label => {
+      const element = document.createElement("div");
+      element.textContent = label;
+      return element;
+    }));
+    return;
+  }
+  labels.forEach((label, index) => setText(container.children[index] as HTMLElement, label));
+}
+
+let leaderboardFingerprint = "";
+function renderLeaderboard() {
+  if (!conn) return;
   const results = [...conn.db.result.iter()]
     .filter(result => result.ruleset === RULESET && result.crewSize === leaderboardCrew && result.challenge === leaderboardChallenge)
     .sort((a, b) => a.timeMs - b.timeMs).slice(0, 15);
+  const fingerprint = `${leaderboardChallenge}:${leaderboardCrew}|${results.map(result => `${result.id}:${result.timeMs}:${result.names}`).join("|")}`;
+  if (fingerprint === leaderboardFingerprint) return;
+  leaderboardFingerprint = fingerprint;
   $("leader-list").replaceChildren(...results.map((result, index) => {
     const row = document.createElement("div"); row.className = "leader-row";
     const rank = document.createElement("span"); rank.textContent = String(index + 1).padStart(2, "0");
@@ -602,7 +714,19 @@ function refresh() {
     const time = document.createElement("strong"); time.textContent = formatTime(result.timeMs);
     row.append(rank, names, time); return row;
   }));
-  if (!results.length) $("leader-list").textContent = `No ${leaderboardCrew}-player ${challengeFor(leaderboardChallenge).difficulty} finishes yet. Your crew can set the first exact time.`;
+  if (!results.length) setText($("leader-list"), `No ${leaderboardCrew}-player ${challengeFor(leaderboardChallenge).difficulty} finishes yet. Your crew can set the first exact time.`);
+}
+
+function refresh(areas: number = RefreshArea.All) {
+  if (!ready || !conn) return;
+  const roomChanged = Boolean(areas & (RefreshArea.Simulation | RefreshArea.Structure));
+  const view = roomChanged ? synchronizeRankedRoom() : race.view(Date.now());
+  if (areas & RefreshArea.Structure) {
+    if (view.mode === "ranked") renderRankedStructure(view);
+    else syncKnownRoom();
+  }
+  if (roomChanged) renderStandings(view);
+  if (areas & RefreshArea.Leaderboard) renderLeaderboard();
 }
 
 function input(): Input {
@@ -711,7 +835,9 @@ function frame(timestamp: number) {
   requestAnimationFrame(frame);
 }
 
+const invited = new URL(location.href).searchParams.get("room");
+const initialRoom = normalizeRoomCode(invited ?? sessionStorage.getItem(rememberedRoomKey) ?? undefined);
+if (initialRoom) ($("code") as HTMLInputElement).value = initialRoom;
+if (invited) modal("lobby");
 updateModeControls(); drawRoles(); updateCourseUI(); updateHelp(); updateLeaderboardFilters();
 ensureConnection(); requestAnimationFrame(frame);
-const invited = new URL(location.href).searchParams.get("room");
-if (invited) { ($("code") as HTMLInputElement).value = invited; modal("lobby"); ensureConnection(); }

@@ -19,6 +19,7 @@ try {
 
   const report = await page.evaluate(async ({ server, database }) => {
     const { DbConnection } = await import("/src/module_bindings/index.ts");
+    const { connect: connectGameNetwork } = await import("/src/network.ts");
     const { CHALLENGE, RULESET, rolesFor, teammateInputs } = await import("/shared/physics.ts");
     const { DISCONNECT_GRACE_MICROS } = await import("/shared/match-lifecycle.ts");
     const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -61,6 +62,70 @@ try {
     });
 
     const nonce = Date.now().toString(36).toUpperCase().slice(-7);
+    const verifyRoomSubscriptionScope = async () => {
+      const connections = [];
+      const codeA = `S3A${nonce}`;
+      const codeB = `S3B${nonce}`;
+      let scopedNetwork;
+      try {
+        const hostA = await open();
+        const hostB = await open();
+        connections.push(hostA.connection, hostB.connection);
+        const joinArgs = code => ({
+          code,
+          name: `Scope ${code}`,
+          teamNumber: 0,
+          role: 0,
+          ruleset: RULESET,
+          challenge: CHALLENGE.Easy,
+          crewSize: 3,
+        });
+        await hostA.connection.reducers.join(joinArgs(codeA));
+        await hostB.connection.reducers.join(joinArgs(codeB));
+
+        let networkError;
+        let readyNetwork;
+        const readyPromise = new Promise(resolve => { readyNetwork = resolve; });
+        const roomEvents = [];
+        scopedNetwork = connectGameNetwork({
+          ready: readyNetwork,
+          roomData: code => roomEvents.push(code),
+          leaderboardData: () => {},
+          error: message => { networkError = message; },
+        });
+        await readyPromise;
+        scopedNetwork.setRoom(codeA);
+        await waitFor(
+          () => roomEvents.includes(codeA) && scopedNetwork.connection.db.room.id.find(codeA),
+          "scoped network did not expose room A",
+        );
+        check(!scopedNetwork.connection.db.room.id.find(codeB), "room A scope leaked room B");
+        check(
+          [...scopedNetwork.connection.db.player.iter()].every(row => row.room === codeA),
+          "room A scope leaked another room's players",
+        );
+        check(
+          [...scopedNetwork.connection.db.team.iter()].every(row => row.room === codeA),
+          "room A scope leaked another room's teams",
+        );
+
+        scopedNetwork.setRoom(codeB);
+        await waitFor(
+          () => roomEvents.includes(codeB) && scopedNetwork.connection.db.room.id.find(codeB),
+          "scoped network did not expose room B",
+        );
+        await waitFor(
+          () => !scopedNetwork.connection.db.room.id.find(codeA),
+          "switching scope retained room A",
+        );
+        check(!networkError, `scoped network failed: ${networkError}`);
+        await hostA.connection.reducers.leave({});
+        await hostB.connection.reducers.leave({});
+      } finally {
+        scopedNetwork?.disconnect();
+        connections.forEach(connection => connection.disconnect());
+      }
+    };
     const verifyReplacementConnectionOwnsLease = async () => {
       const connections = [];
       const code = `R50${nonce}`;
@@ -105,6 +170,43 @@ try {
         );
       } finally {
         connections.forEach(connection => connection.disconnect());
+      }
+    };
+    const verifyLeaderboardSubscriptionScope = async () => {
+      let scopedNetwork;
+      try {
+        let networkError;
+        let readyNetwork;
+        const readyPromise = new Promise(resolve => { readyNetwork = resolve; });
+        const applied = [];
+        scopedNetwork = connectGameNetwork({
+          ready: readyNetwork,
+          roomData: () => {},
+          leaderboardData: scope => applied.push(`${scope.challenge}:${scope.crewSize}`),
+          error: message => { networkError = message; },
+        });
+        await readyPromise;
+        scopedNetwork.setLeaderboard({ challenge: CHALLENGE.Difficult, crewSize: 3 });
+        await waitFor(
+          () => applied.includes(`${CHALLENGE.Difficult}:3`) && [...scopedNetwork.connection.db.result.iter()].length > 0,
+          "Difficult/3 leaderboard scope did not apply",
+        );
+        check(
+          [...scopedNetwork.connection.db.result.iter()].every(row => row.ruleset === RULESET && row.challenge === CHALLENGE.Difficult && row.crewSize === 3),
+          "Difficult/3 leaderboard leaked another result category",
+        );
+        scopedNetwork.setLeaderboard({ challenge: CHALLENGE.Easy, crewSize: 5 });
+        await waitFor(
+          () => applied.includes(`${CHALLENGE.Easy}:5`) && [...scopedNetwork.connection.db.result.iter()].some(row => row.challenge === CHALLENGE.Easy && row.crewSize === 5),
+          "Easy/5 leaderboard scope did not apply",
+        );
+        check(
+          [...scopedNetwork.connection.db.result.iter()].every(row => row.ruleset === RULESET && row.challenge === CHALLENGE.Easy && row.crewSize === 5),
+          "Easy/5 leaderboard retained another result category",
+        );
+        check(!networkError, `leaderboard scope failed: ${networkError}`);
+      } finally {
+        scopedNetwork?.disconnect();
       }
     };
     const runRoom = async ({ label, challenge, crewSize, exerciseReconnect }) => {
@@ -412,8 +514,10 @@ try {
       { label: "Easy / 5-player", challenge: CHALLENGE.Easy, crewSize: 5, exerciseReconnect: true },
     ];
     const results = [];
+    await verifyRoomSubscriptionScope();
     await verifyReplacementConnectionOwnsLease();
     for (const scenario of scenarios) results.push(await runRoom(scenario));
+    await verifyLeaderboardSubscriptionScope();
     await verifyAbandonedTeamDoesNotBlock();
     check(
       new Set(results.map(result => `${result.challenge}:${result.crewSize}`)).size === scenarios.length,
@@ -427,9 +531,79 @@ try {
     [[2, 3], [0, 5]],
   );
   assert.ok(report.every(result => Number.isInteger(result.timeMs) && result.timeMs > 0));
+  const uiCode = `U3${Date.now().toString(36).toUpperCase().slice(-7)}`;
+  await page.waitForFunction(() => document.querySelector("#connection")?.textContent?.includes("CONNECTED"));
+  await page.locator('[data-home-crew="3"]').click();
+  await page.locator("#open-lobby").click();
+  await page.locator("#name").fill("UI host");
+  await page.locator("#code").fill(uiCode);
+  await page.locator("#team").selectOption("0");
+  await page.locator("#part").selectOption("0");
+  await page.locator("#join").click();
+  await page.waitForFunction(() => document.querySelectorAll("#members > div").length === 1);
+  await page.evaluate(async ({ server, database, code }) => {
+    const { DbConnection } = await import("/src/module_bindings/index.ts");
+    const { CHALLENGE, RULESET } = await import("/shared/physics.ts");
+    const open = () => new Promise((resolve, reject) => {
+      DbConnection.builder()
+        .withUri(server)
+        .withDatabaseName(database)
+        .onConnect(connection => resolve(connection))
+        .onConnectError((_context, error) => reject(error))
+        .build();
+    });
+    const clients = [await open(), await open()];
+    window.__rankedUiClients = clients;
+    await Promise.all(clients.map((connection, index) => connection.reducers.join({
+      code,
+      name: `UI pilot ${index + 2}`,
+      teamNumber: 0,
+      role: index + 1,
+      ruleset: RULESET,
+      challenge: CHALLENGE.Easy,
+      crewSize: 3,
+    })));
+  }, { server, database, code: uiCode });
+  await page.waitForFunction(() => document.querySelectorAll("#members > div").length === 3);
+  await page.locator("#start").click();
+  await page.waitForFunction(() => document.querySelector("#race-status")?.textContent === "RACING", undefined, { timeout: 8_000 });
+  await page.evaluate(() => {
+    const metrics = {
+      mutations: 0,
+      courseStage: document.querySelector("#course-stages")?.firstElementChild,
+      roleCard: document.querySelector("#role-cards")?.firstElementChild,
+      member: document.querySelector("#members")?.firstElementChild,
+    };
+    const observer = new MutationObserver(records => { metrics.mutations += records.length; });
+    observer.observe(document, { attributes: true, characterData: true, childList: true, subtree: true });
+    window.__rankedUiMetrics = metrics;
+    window.__rankedUiObserver = observer;
+  });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.__rankedUiMetrics.mutations = 0;
+    window.__rankedUiObserver.takeRecords();
+  });
+  await page.waitForTimeout(2_000);
+  const rankedUi = await page.evaluate(() => ({
+    mutationsPerSecond: window.__rankedUiMetrics.mutations / 2,
+    stableCourseStage: window.__rankedUiMetrics.courseStage === document.querySelector("#course-stages")?.firstElementChild,
+    stableRoleCard: window.__rankedUiMetrics.roleCard === document.querySelector("#role-cards")?.firstElementChild,
+    stableMember: window.__rankedUiMetrics.member === document.querySelector("#members")?.firstElementChild,
+  }));
+  assert.ok(rankedUi.mutationsPerSecond <= 120, `ranked UI produced ${rankedUi.mutationsPerSecond} DOM mutations/sec`);
+  assert.equal(rankedUi.stableCourseStage, true);
+  assert.equal(rankedUi.stableRoleCard, true);
+  assert.equal(rankedUi.stableMember, true);
+  await page.locator("#exit").click();
+  await page.evaluate(async () => {
+    window.__rankedUiObserver.disconnect();
+    await Promise.all(window.__rankedUiClients.map(connection => connection.reducers.leave({}).catch(() => {})));
+    window.__rankedUiClients.forEach(connection => connection.disconnect());
+  });
   console.log(
-    "PASS: dynamic 3/5-player readiness, locks, reconnect grace, abandonment quorum, authoritative finishes, and categorized results.",
-    report,
+    "PASS: scoped live data, stable ranked UI, dynamic 3/5-player readiness, locks, reconnect grace, abandonment quorum, authoritative finishes, and categorized results.",
+    { report, rankedUi },
   );
 } finally {
   await browser.close();
