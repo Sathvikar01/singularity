@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { groundAt } from "../shared/course";
 import type { Body } from "../shared/physics";
 import { BodyPoseSampler, dampingAlpha } from "./body-pose";
 
@@ -313,13 +314,27 @@ export function createCharacter(
   const elbowsTarget = [new THREE.Vector3(), new THREE.Vector3()];
   const hips = [new THREE.Vector3(), new THREE.Vector3()];
   const kneesTarget = [new THREE.Vector3(), new THREE.Vector3()];
+  const basisUp = new THREE.Vector3();
+  const basisRight = new THREE.Vector3();
+  const basisForward = new THREE.Vector3();
+  const supportRight = new THREE.Vector3();
   const direction = new THREE.Vector3();
-  const offset = new THREE.Vector3();
+  const pole = new THREE.Vector3();
+  const ikDirection = new THREE.Vector3();
+  const ikPole = new THREE.Vector3();
   const neckStart = new THREE.Vector3();
   const neckEnd = new THREE.Vector3();
+  const previousTorso = new THREE.Vector3();
+  const bodyQuaternion = new THREE.Quaternion();
+  const displayQuaternion = new THREE.Quaternion();
+  const previewQuaternion = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI);
+  const bodyMatrix = new THREE.Matrix4();
   const poseSampler = new BodyPoseSampler();
   let renderTick = 0;
   let headYaw = 0;
+  let poseInitialized = false;
+  let wasGrounded = true;
+  let landingPulse = 0;
 
   function readPoint(target: THREE.Vector3, positions: Float64Array, index: number) {
     const offset = index * 3;
@@ -370,12 +385,45 @@ export function createCharacter(
       readPoint(footPositions[0], sampled.positions, 4);
       readPoint(footPositions[1], sampled.positions, 5);
 
-      chest.position.copy(torsoPosition).addScaledVector(UP, 0.1);
-      chest.rotation.y = preview ? Math.PI : 0;
-      pelvis.position.copy(torsoPosition).addScaledVector(UP, -0.42);
-      pelvis.rotation.y = preview ? Math.PI : 0;
-      neckStart.copy(torsoPosition).addScaledVector(UP, 0.42);
-      neckEnd.copy(headPosition).addScaledVector(UP, -0.38);
+      const grounded = footPositions.some((foot) =>
+        foot.y <= groundAt(body.challenge, foot.x, foot.z, sampled.tick) + 0.34
+      );
+      const verticalSpeed = poseInitialized && deltaSeconds > 0
+        ? (torsoPosition.y - previousTorso.y) / Math.min(deltaSeconds, 0.1)
+        : 0;
+      landingPulse *= Math.exp(-10 * Math.min(Math.max(deltaSeconds, 0), 0.1));
+      if (!sampled.snapped && poseInitialized && !wasGrounded && grounded && verticalSpeed < -0.8)
+        landingPulse = Math.max(landingPulse, Math.min(1, (-verticalSpeed - 0.8) * 0.16));
+      if (sampled.snapped) landingPulse = 0;
+      previousTorso.copy(torsoPosition);
+      poseInitialized = true;
+      wasGrounded = grounded;
+
+      buildBodyBasis(
+        torsoPosition,
+        headPosition,
+        footPositions[0],
+        footPositions[1],
+        sampled.look,
+        basisUp,
+        basisRight,
+        basisForward,
+        supportRight,
+      );
+      bodyMatrix.makeBasis(basisRight, basisUp, basisForward);
+      bodyQuaternion.setFromRotationMatrix(bodyMatrix);
+      displayQuaternion.copy(bodyQuaternion);
+      if (preview) displayQuaternion.premultiply(previewQuaternion);
+
+      const squash = landingPulse;
+      chest.position.copy(torsoPosition).addScaledVector(basisUp, 0.1 - squash * 0.035);
+      chest.quaternion.copy(displayQuaternion);
+      chest.scale.set(1 + squash * 0.055, 1 - squash * 0.11, 1 + squash * 0.055);
+      pelvis.position.copy(torsoPosition).addScaledVector(basisUp, -0.42 + squash * 0.025);
+      pelvis.quaternion.copy(displayQuaternion);
+      pelvis.scale.set(1 + squash * 0.05, 1 - squash * 0.08, 1 + squash * 0.05);
+      neckStart.copy(torsoPosition).addScaledVector(basisUp, 0.42 - squash * 0.035);
+      neckEnd.copy(headPosition).addScaledVector(basisUp, -0.38);
       setSegment(neck, neckStart, neckEnd, 0.18, direction);
       head.position.copy(headPosition);
       const targetHeadYaw = sampled.look + (preview ? Math.PI : 0);
@@ -389,12 +437,22 @@ export function createCharacter(
         const sign = side === 0 ? -1 : 1;
         shoulders[side]
           .copy(torsoPosition)
-          .add(offset.set(sign * 0.47, 0.28, 0));
-        elbowsTarget[side]
-          .copy(shoulders[side])
-          .add(handPositions[side])
-          .multiplyScalar(0.5)
-          .add(offset.set(sign * 0.12, 0.03, -0.08));
+          .addScaledVector(basisRight, sign * (0.47 + squash * 0.025))
+          .addScaledVector(basisUp, 0.28 - squash * 0.045);
+        pole.copy(shoulders[side])
+          .addScaledVector(basisRight, sign * 0.64)
+          .addScaledVector(basisForward, -0.26)
+          .addScaledVector(basisUp, 0.04);
+        solveTwoBoneJoint(
+          elbowsTarget[side],
+          shoulders[side],
+          handPositions[side],
+          0.52,
+          0.5,
+          pole,
+          ikDirection,
+          ikPole,
+        );
         elbows[side].position.copy(elbowsTarget[side]);
         hands[side].position.copy(handPositions[side]);
         setSegment(
@@ -414,16 +472,27 @@ export function createCharacter(
 
         hips[side]
           .copy(torsoPosition)
-          .add(offset.set(sign * 0.22, -0.42, 0));
-        kneesTarget[side]
-          .copy(hips[side])
-          .add(footPositions[side])
-          .multiplyScalar(0.5)
-          .add(offset.set(sign * 0.035, 0.03, -0.14));
+          .addScaledVector(basisRight, sign * 0.22)
+          .addScaledVector(basisUp, -0.42 + squash * 0.025);
+        pole.copy(hips[side])
+          .addScaledVector(basisRight, sign * 0.08)
+          .addScaledVector(basisForward, 0.68)
+          .addScaledVector(basisUp, -0.12);
+        solveTwoBoneJoint(
+          kneesTarget[side],
+          hips[side],
+          footPositions[side],
+          0.72,
+          0.72,
+          pole,
+          ikDirection,
+          ikPole,
+        );
         knees[side].position.copy(kneesTarget[side]);
         feet[side].position.copy(footPositions[side]);
         feet[side].position.y = Math.max(feet[side].position.y - 0.12, 0.14);
-        feet[side].rotation.y = preview ? Math.PI : 0;
+        feet[side].rotation.y = sampled.look + (preview ? Math.PI : 0);
+        feet[side].scale.set(1 + squash * 0.04, 1 - squash * 0.05, 1 + squash * 0.08);
         setSegment(
           thighs[side],
           hips[side],
@@ -460,6 +529,73 @@ export function createCharacter(
       return renderTick;
     },
   };
+}
+
+function buildBodyBasis(
+  torso: THREE.Vector3,
+  head: THREE.Vector3,
+  leftFoot: THREE.Vector3,
+  rightFoot: THREE.Vector3,
+  look: number,
+  up: THREE.Vector3,
+  right: THREE.Vector3,
+  forward: THREE.Vector3,
+  support: THREE.Vector3,
+) {
+  up.copy(head).sub(torso);
+  if (up.lengthSq() < 0.0025) up.copy(UP);
+  else up.normalize();
+  if (up.dot(UP) < 0.2) up.lerp(UP, 0.7).normalize();
+
+  forward.set(Math.sin(look), 0, Math.cos(look));
+  forward.addScaledVector(up, -forward.dot(up));
+  if (forward.lengthSq() < 0.0025) forward.set(0, 0, 1);
+  forward.normalize();
+  right.crossVectors(up, forward).normalize();
+
+  support.copy(rightFoot).sub(leftFoot);
+  support.addScaledVector(up, -support.dot(up));
+  if (support.lengthSq() > 0.01) {
+    support.normalize();
+    if (support.dot(right) < 0) support.negate();
+    right.lerp(support, 0.32).normalize();
+  }
+  forward.crossVectors(right, up).normalize();
+  right.crossVectors(up, forward).normalize();
+}
+
+function solveTwoBoneJoint(
+  joint: THREE.Vector3,
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  upperLength: number,
+  lowerLength: number,
+  pole: THREE.Vector3,
+  direction: THREE.Vector3,
+  poleDirection: THREE.Vector3,
+) {
+  direction.copy(end).sub(start);
+  const distance = Math.max(direction.length(), 0.001);
+  direction.multiplyScalar(1 / distance);
+  const stretch = Math.max(1, distance / Math.max(upperLength + lowerLength - 0.001, 0.001));
+  const upper = upperLength * stretch;
+  const lower = lowerLength * stretch;
+  const along = Math.min(
+    upper,
+    Math.max(0, (upper * upper - lower * lower + distance * distance) / (2 * distance)),
+  );
+  const height = Math.sqrt(Math.max(0, upper * upper - along * along));
+
+  poleDirection.copy(pole).sub(start);
+  poleDirection.addScaledVector(direction, -poleDirection.dot(direction));
+  if (poleDirection.lengthSq() < 0.0001) {
+    poleDirection.crossVectors(direction, UP);
+    if (poleDirection.lengthSq() < 0.0001) poleDirection.set(1, 0, 0);
+  }
+  poleDirection.normalize();
+  joint.copy(start)
+    .addScaledVector(direction, along)
+    .addScaledVector(poleDirection, height);
 }
 
 function angleDelta(target: number, current: number) {
